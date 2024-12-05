@@ -195,7 +195,11 @@ public class TTSManager {
             audioTrack.setPlaybackPositionUpdateListener(new AudioTrack.OnPlaybackPositionUpdateListener() {
                 @Override
                 public void onMarkerReached(AudioTrack track) {
-                    Log.d(TAG, "on marker reached uid: " + uid + ", isLast: " + isLast);
+                    Log.d(TAG, "on marker reached uid: " + uid + ", isLast: " + isLast + ", connected: " + connected);
+                    if(!connected){
+                        return;
+                    }
+
                     try {
                         if (isLast) {
                             JsbBridge.sendToScript("TTSEnd", "{\"uid\": \"" + uid.trim() + "\"}");
