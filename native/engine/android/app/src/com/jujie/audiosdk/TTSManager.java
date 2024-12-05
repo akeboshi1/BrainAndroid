@@ -240,10 +240,17 @@ public class TTSManager {
         if (connected) {
             connected = false;
             audioQueue.clear();
+
+            if(audioTrack != null){
+                audioTrack.stop();
+                audioTrack.release();
+            }
+
             if (webSocket != null) {
                 webSocket.close(1000, "");
                 webSocket = null;
             }
+
             Log.d(TAG, "send script");
             JsbBridge.sendToScript("TTSClosed");
             isPlaying = false;
