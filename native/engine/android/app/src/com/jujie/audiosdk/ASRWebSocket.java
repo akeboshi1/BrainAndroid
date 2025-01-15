@@ -7,6 +7,8 @@ import com.cocos.lib.JsbBridge;
 import org.json.JSONException;
 import org.json.JSONObject;
 
+import java.util.Map;
+
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.WebSocket;
@@ -20,9 +22,25 @@ public class ASRWebSocket {
     private ASRWebSocket() {
     }
 
-    public void connectWS() {
+    public void connectWS(Map args) {
         OkHttpClient client = new OkHttpClient();
-        Request request = new Request.Builder().url("wss://test.paipai.xinjiaxianglao.com/asr-tmp/").build();
+        String url = "wss://test.paipai.xinjiaxianglao.com/asr-tmp/?proj=colapai";
+        if(args != null){
+            if(args.containsKey("id")){
+                url += "&id" + "=" + args.get("id");
+            }
+            if(args.containsKey("save_audio")){
+                String saveAudio = (String) args.get("save_audio");
+                saveAudio = "true".equals(saveAudio) || "1".equals(saveAudio) ? "1" : "0";
+                url += "&save_audio" + "=" + saveAudio;
+            }
+            if(args.containsKey("max_sentence_silence")){
+                url += "&max_sentence_silence" + "=" + args.get("max_sentence_silence");
+            }
+
+        }
+
+        Request request = new Request.Builder().url(url).build();
         webSocket = client.newWebSocket(request, new WebSocketListener() {
 
             @Override

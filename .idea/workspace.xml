@@ -13,9 +13,9 @@
   <component name="Git.Settings">
     <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
   </component>
-  <component name="ProjectColorInfo"><![CDATA[{
-  "associatedIndex": 5
-}]]></component>
+  <component name="ProjectColorInfo">{
+  &quot;associatedIndex&quot;: 5
+}</component>
   <component name="ProjectId" id="2phGF6TqgnrmBmtX4BrqGUiSlzt" />
   <component name="ProjectViewState">
     <option name="hideEmptyMiddlePackages" value="true" />
@@ -24,6 +24,7 @@
   <component name="PropertiesComponent"><![CDATA[{
   "keyToString": {
     "RunOnceActivity.ShowReadmeOnStart": "true",
+    "RunOnceActivity.git.unshallow": "true",
     "git-widget-placeholder": "master",
     "last_opened_file_path": "D:/works/jujie/wrokspace/paipai-2.0/Paipai-Android",
     "node.js.detected.package.eslint": "true",
@@ -50,6 +51,7 @@
       <option name="presentableId" value="Default" />
       <updated>1733210787218</updated>
       <workItem from="1733210788416" duration="5006000" />
+      <workItem from="1733900026908" duration="408000" />
     </task>
     <servers />
   </component>

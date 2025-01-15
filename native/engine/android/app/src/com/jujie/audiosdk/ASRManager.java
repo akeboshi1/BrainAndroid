@@ -1,5 +1,8 @@
 package com.jujie.audiosdk;
 
+
+import static com.jujie.audiosdk.Constant.REQUEST_RECORD_AUDIO_PERMISSION;
+
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
 
@@ -11,6 +14,8 @@ import android.media.MediaRecorder;
 import android.util.Log;
 
 import com.cocos.lib.JsbBridge;
+
+import java.util.Map;
 
 public class ASRManager {
 
@@ -27,21 +32,21 @@ public class ASRManager {
         bufferSize = AudioRecord.getMinBufferSize(16000, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT);
     }
 
-    public static void start(Context context) {
+    public static void start(Context context, Map args) {
         if (manager == null) {
             manager = new ASRManager();
         }
-        manager.startRecording(context);
+        manager.startRecording(context, args);
     }
 
     public static void close() {
         manager.closeASR();
     }
 
-    public void startRecording(Context context) {
+    public void startRecording(Context context, Map args) {
         if (ContextCompat.checkSelfPermission(context, android.Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             // 请求权限
-            ActivityCompat.requestPermissions((android.app.Activity) context, new String[]{android.Manifest.permission.RECORD_AUDIO}, 1);
+            ActivityCompat.requestPermissions((android.app.Activity) context, new String[]{android.Manifest.permission.RECORD_AUDIO}, REQUEST_RECORD_AUDIO_PERMISSION);
             return;
         }
 
@@ -58,7 +63,7 @@ public class ASRManager {
 
         Log.d("ASR", "worker starting");
 
-        ASRWebSocket.getInstance().connectWS();
+        ASRWebSocket.getInstance().connectWS(args);
 
         new Thread(() -> {
             byte[] buffer = new byte[bufferSize];

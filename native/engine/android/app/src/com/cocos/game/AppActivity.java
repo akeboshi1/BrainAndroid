@@ -24,28 +24,39 @@ THE SOFTWARE.
 ****************************************************************************/
 package com.cocos.game;
 
+import static com.jujie.audiosdk.Constant.REQUEST_LOCATION_PERMISSION;
+import static com.jujie.audiosdk.Constant.REQUEST_RECORD_AUDIO_PERMISSION;
+import android.content.Intent;
+
 import android.content.Context;
 import android.os.Bundle;
 import android.content.Intent;
 import android.content.res.Configuration;
 import android.util.Log;
 import androidx.annotation.NonNull;
+import androidx.core.app.ActivityCompat;
+
 import android.content.pm.PackageManager;
+import android.widget.Toast;
 
 import com.cocos.lib.JsbBridge;
 import com.cocos.service.SDKWrapper;
 import com.cocos.lib.CocosActivity;
 import com.jujie.audiosdk.ASRManager;
+import com.jujie.audiosdk.AddressManager;
+import com.jujie.audiosdk.PaipaiCaptureActivity;
 import com.jujie.audiosdk.TTSManager;
 
 import org.json.JSONException;
 import org.json.JSONObject;
 
-import java.lang.reflect.Array;
 import java.util.Arrays;
+import java.util.HashMap;
+import java.util.Map;
 
 public class AppActivity extends CocosActivity {
     private Context instance;
+    private Map<String, Object> args;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -61,9 +72,17 @@ public class AppActivity extends CocosActivity {
                 //TO DO
                 Log.d("AppActivity","on script: "+arg0 +","+arg1);
 
-                if(arg0.equals("ASR") && arg1.equals("connect")){
+                if(arg0.equals("ASR") && arg1.startsWith("connect")){
+                    Map<String, Object> result = parseCommand(arg1);
+
+                    Log.d("AppActivity","parse command reslut" + result);
+
+                    String func = (String) result.get("function");
+                    Map<String, Object> param = (Map<String, Object>) result.get("param");
+
                     Log.d("AppActivity","ASR script: "+arg1);
-                    ASRManager.start(instance);
+                    ASRManager.start(instance, param);
+                    args = param;
                 }
 
                 if(arg0.equals("ASR") && arg1.equals("close")){
@@ -96,9 +115,25 @@ public class AppActivity extends CocosActivity {
                         Log.d("AppActivity", "parse json fail.");
                     }
                 }
+
+                // address start
+                if(arg0.equals("ADDRESS") && arg1.equals("start")){
+                    AddressManager.start(instance);
+                }
+
+                if(arg0.equals("QRCODE") && arg1.equals("scan")){
+
+                    Log.d("AppActivity", "scan qrcode");
+
+                    Intent intent = new Intent(instance, PaipaiCaptureActivity.class);
+                    startActivityForResult(intent, 1002);
+
+                }
             }
         });
     }
+
+
 
     @Override
     public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
@@ -106,7 +141,7 @@ public class AppActivity extends CocosActivity {
 
         Log.d("AppActivity", "onRequestPermissionsResult: requestCode = " + requestCode + ", permissions = " + Arrays.toString(permissions) + ", grantResults = " + Arrays.toString(grantResults));
 
-        if (requestCode == 1) {
+        if (requestCode == REQUEST_RECORD_AUDIO_PERMISSION) {
             boolean recordAudioPermissionGranted = false;
             // 检查请求的权限是否被授予
             for (int i = 0; i < permissions.length; i++) {
@@ -126,11 +161,38 @@ public class AppActivity extends CocosActivity {
 
             if (recordAudioPermissionGranted) {
                 // 权限已授予，执行需要该权限的操作
-                ASRManager.start(this);
+                ASRManager.start(this, args);
 
             } else {
                 // 权限被拒绝，处理拒绝的情况
             }
+        }else if(requestCode == REQUEST_LOCATION_PERMISSION){
+            Log.d("AppActivity", "check location permission");
+
+            boolean locationPermissionGranted = false;
+            // 检查请求的权限是否被授予
+            for (int i = 0; i < permissions.length; i++) {
+                String permission = permissions[i];
+
+                if (permission.equals(android.Manifest.permission.ACCESS_FINE_LOCATION) || permission.equals(android.Manifest.permission.ACCESS_COARSE_LOCATION)) {
+                    if (grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                        locationPermissionGranted = true;
+                        break;
+                    } else {
+                        locationPermissionGranted = false;
+                    }
+                }
+            }
+
+            Log.d("AppActivity", "locationPermissionGranted = " + locationPermissionGranted);
+
+            if (locationPermissionGranted) {
+                // 权限已授予，执行需要该权限的操作
+                AddressManager.start(this);
+            } else {
+                // 权限被拒绝，处理拒绝的情况
+            }
+
         }
     }
 
@@ -158,8 +220,18 @@ public class AppActivity extends CocosActivity {
 
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        Log.d("AppActivity", "onActivityResult: requestCode = " + requestCode + ", resultCode = " + resultCode + ", data = " + data);
+        Log.d("AppActivity",  data.getStringExtra("SCAN_RESULT"));
+
         super.onActivityResult(requestCode, resultCode, data);
         SDKWrapper.shared().onActivityResult(requestCode, resultCode, data);
+
+        if (requestCode == 1002 && resultCode == RESULT_OK) {
+            String scannedResult = data.getStringExtra("SCAN_RESULT");
+            // 处理扫描结果
+            Toast.makeText(this, "扫码结果: " + scannedResult, Toast.LENGTH_SHORT).show();
+        }
+
     }
 
     @Override
@@ -215,4 +287,104 @@ public class AppActivity extends CocosActivity {
         SDKWrapper.shared().onLowMemory();
         super.onLowMemory();
     }
+
+    public static Map<String, Object> parseCommand(String command) {
+        // 定义结果 HashMap
+        Map<String, Object> result = new HashMap<>();
+
+        // 判断命令是否带参数
+        if (command.contains("(") && command.contains(")")) {
+            // 提取函数名（括号之前的部分）
+            String functionName = command.substring(0, command.indexOf("(")).trim();
+            result.put("function", functionName);
+
+            // 提取括号中的参数
+            String paramString = command.substring(command.indexOf("(") + 1, command.lastIndexOf(")")).trim();
+
+            if (paramString.isEmpty()) {
+                // 如果没有参数，将 param 设置为 null
+                result.put("param", null);
+            } else {
+                // 如果有参数，解析为 HashMap
+                result.put("param", parseParam(paramString));
+            }
+        }
+
+        return result;
+    }
+
+    public static Map<String, Object> parseParam(String paramString) {
+        // 去掉首尾的花括号
+        paramString = paramString.trim();
+        if (paramString.startsWith("{") && paramString.endsWith("}")) {
+            paramString = paramString.substring(1, paramString.length() - 1).trim();
+        }
+
+        // 将单引号替换为双引号
+        paramString = paramString.replace("'", "\"");
+
+        Map<String, Object> paramMap = new HashMap<>();
+
+        // 拆分每一对 key: value
+        String[] pairs = paramString.split(",");
+        for (String pair : pairs) {
+            // 去掉空格
+            pair = pair.trim();
+
+            // 分割 key 和 value
+            String[] keyValue = pair.split(":");
+            if (keyValue.length == 2) {
+                String key = keyValue[0].trim();
+                String value = keyValue[1].trim();
+
+                // 如果值是数字，则转换为数字类型
+                if (value.matches("-?\\d+(\\.\\d+)?")) {
+                    // 数字类型
+                    paramMap.put(key, parseNumber(value));
+                } else {
+                    // 其他值都作为字符串处理
+                    paramMap.put(key, value.replace("\"", ""));
+                }
+            }
+        }
+
+        return paramMap;
+    }
+
+    // 解析数字
+    private static Object parseNumber(String value) {
+        if (value.contains(".")) {
+            return Double.parseDouble(value);
+        } else {
+            return Integer.parseInt(value);
+        }
+    }
+
+
+    public static void main(String[] args) {
+        String command = "test()";
+        Map<String, Object> result = parseCommand(command);
+        System.out.println(result);
+
+        command = "test(123)";
+        result = parseCommand(command);
+        System.out.println(result);
+
+        command = "test(123, 'hello', 3.14)";
+        result = parseCommand(command);
+        System.out.println(result);
+
+        command = "connect()";
+        result = parseCommand(command);
+        System.out.println(result);
+
+        command = "connect({id:1, name:'hello', age: 29.39})";
+        result = parseCommand(command);
+        System.out.println(result);
+
+
+
+    }
+
+
 }
