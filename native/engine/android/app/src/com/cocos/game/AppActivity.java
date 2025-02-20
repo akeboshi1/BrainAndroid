@@ -26,15 +26,17 @@ package com.cocos.game;
 
 import static com.jujie.audiosdk.Constant.REQUEST_LOCATION_PERMISSION;
 import static com.jujie.audiosdk.Constant.REQUEST_RECORD_AUDIO_PERMISSION;
+
+import android.Manifest;
 import android.content.Intent;
 
 import android.content.Context;
 import android.os.Bundle;
-import android.content.Intent;
 import android.content.res.Configuration;
+import android.provider.Settings;
+import android.telephony.TelephonyManager;
 import android.util.Log;
 import androidx.annotation.NonNull;
-import androidx.core.app.ActivityCompat;
 
 import android.content.pm.PackageManager;
 import android.widget.Toast;
@@ -44,6 +46,7 @@ import com.cocos.service.SDKWrapper;
 import com.cocos.lib.CocosActivity;
 import com.jujie.audiosdk.ASRManager;
 import com.jujie.audiosdk.AddressManager;
+import com.jujie.audiosdk.Helper;
 import com.jujie.audiosdk.PaipaiCaptureActivity;
 import com.jujie.audiosdk.TTSManager;
 
@@ -57,10 +60,22 @@ import java.util.Map;
 public class AppActivity extends CocosActivity {
     private Context instance;
     private Map<String, Object> args;
+    private TelephonyManager telephonyManager;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+
+        String androidId = Settings.Secure.getString(
+                this.getContentResolver(),
+                Settings.Secure.ANDROID_ID
+        );
+
+        Helper.uuid = androidId;
+
+        // 启动日志捕获
+        LogcatCapture.startCapturing();
+
         // DO OTHER INITIALIZATION BELOW
         SDKWrapper.shared().init(this);
 
@@ -124,16 +139,24 @@ public class AppActivity extends CocosActivity {
                 if(arg0.equals("QRCODE") && arg1.equals("scan")){
 
                     Log.d("AppActivity", "scan qrcode");
-
                     Intent intent = new Intent(instance, PaipaiCaptureActivity.class);
                     startActivityForResult(intent, 1002);
-
                 }
+
+                if(arg0.equals("DEVICE") && arg1.equals("info")){
+                    HashMap<String, String> map = new HashMap<>();
+                    map.put("deviceId", androidId);
+
+                    JSONObject jsonObject = new JSONObject(map);
+                    String result = jsonObject.toString();
+
+                    JsbBridge.sendToScript("DEVICEInfo", result);
+                }
+
+
             }
         });
     }
-
-
 
     @Override
     public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
@@ -142,22 +165,23 @@ public class AppActivity extends CocosActivity {
         Log.d("AppActivity", "onRequestPermissionsResult: requestCode = " + requestCode + ", permissions = " + Arrays.toString(permissions) + ", grantResults = " + Arrays.toString(grantResults));
 
         if (requestCode == REQUEST_RECORD_AUDIO_PERMISSION) {
-            boolean recordAudioPermissionGranted = false;
-            // 检查请求的权限是否被授予
-            for (int i = 0; i < permissions.length; i++) {
-                String permission = permissions[i];
-
-                if (permission.equals(android.Manifest.permission.RECORD_AUDIO)) {
-                    if (grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-                        recordAudioPermissionGranted = true;
-                        break;
-                    } else {
-                        recordAudioPermissionGranted = false;
-                    }
-                }
-            }
-
-            Log.d("AppActivity", "recordAudioPermissionGranted = " + recordAudioPermissionGranted);
+            boolean recordAudioPermissionGranted = isPermissionGranted(permissions, grantResults[0], new String[]{android.Manifest.permission.RECORD_AUDIO});
+//            boolean recordAudioPermissionGranted = false;
+//            // 检查请求的权限是否被授予
+//            for (int i = 0; i < permissions.length; i++) {
+//                String permission = permissions[i];
+//
+//                if (permission.equals(android.Manifest.permission.RECORD_AUDIO)) {
+//                    if (grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+//                        recordAudioPermissionGranted = true;
+//                        break;
+//                    } else {
+//                        recordAudioPermissionGranted = false;
+//                    }
+//                }
+//            }
+//
+//            Log.d("AppActivity", "recordAudioPermissionGranted = " + recordAudioPermissionGranted);
 
             if (recordAudioPermissionGranted) {
                 // 权限已授予，执行需要该权限的操作
@@ -171,18 +195,8 @@ public class AppActivity extends CocosActivity {
 
             boolean locationPermissionGranted = false;
             // 检查请求的权限是否被授予
-            for (int i = 0; i < permissions.length; i++) {
-                String permission = permissions[i];
-
-                if (permission.equals(android.Manifest.permission.ACCESS_FINE_LOCATION) || permission.equals(android.Manifest.permission.ACCESS_COARSE_LOCATION)) {
-                    if (grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-                        locationPermissionGranted = true;
-                        break;
-                    } else {
-                        locationPermissionGranted = false;
-                    }
-                }
-            }
+            // locationPermissionGranted = isPermissionGranted(permissions, grantResults, locationPermissionGranted);
+            locationPermissionGranted = isPermissionGranted(permissions, grantResults[0], new String[]{Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION});
 
             Log.d("AppActivity", "locationPermissionGranted = " + locationPermissionGranted);
 
@@ -194,6 +208,19 @@ public class AppActivity extends CocosActivity {
             }
 
         }
+    }
+
+    private static boolean isPermissionGranted(String[] permissions, int grantResult, String[] expectedPermissions ) {
+        for (int i = 0; i < permissions.length; i++) {
+            String permission = permissions[i];
+
+            if(Arrays.asList(expectedPermissions).contains(permission)){
+                if (grantResult == PackageManager.PERMISSION_GRANTED) {
+                    return true;
+                }
+            };
+        }
+        return false;
     }
 
     @Override
