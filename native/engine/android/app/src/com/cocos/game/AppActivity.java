@@ -25,7 +25,8 @@ THE SOFTWARE.
 package com.cocos.game;
 
 import static com.jujie.audiosdk.Constant.REQUEST_LOCATION_PERMISSION;
-import static com.jujie.audiosdk.Constant.REQUEST_RECORD_AUDIO_PERMISSION;
+import static com.jujie.audiosdk.Constant.REQUEST_RECORD_AUDIO_ASR_PERMISSION;
+import static com.jujie.audiosdk.Constant.REQUEST_RECORD_AUDIO_FSR_PERMISSION;
 
 import android.Manifest;
 import android.content.Intent;
@@ -46,6 +47,7 @@ import com.cocos.service.SDKWrapper;
 import com.cocos.lib.CocosActivity;
 import com.jujie.audiosdk.ASRManager;
 import com.jujie.audiosdk.AddressManager;
+import com.jujie.audiosdk.FSRManager;
 import com.jujie.audiosdk.Helper;
 import com.jujie.audiosdk.PaipaiCaptureActivity;
 import com.jujie.audiosdk.TTSManager;
@@ -87,6 +89,18 @@ public class AppActivity extends CocosActivity {
                 //TO DO
                 Log.d("AppActivity","on script: "+arg0 +","+arg1);
 
+                ///////////////////////////fsr////////////////////////
+
+                if (arg0.equals("FSR") && arg1.equals("start")) {
+                    Log.d("AppActivity", "FSR script: " + arg1);
+                    FSRManager.start(instance);
+                }
+                if (arg0.equals("FSR") && arg1.equals("stop")) {
+                    Log.d("AppActivity", "FSR script: " + arg1);
+                    FSRManager.stop();
+                }
+
+                ///////////////////////////fsr////////////////////////
                 if(arg0.equals("ASR") && arg1.startsWith("connect")){
                     Map<String, Object> result = parseCommand(arg1);
 
@@ -164,7 +178,7 @@ public class AppActivity extends CocosActivity {
 
         Log.d("AppActivity", "onRequestPermissionsResult: requestCode = " + requestCode + ", permissions = " + Arrays.toString(permissions) + ", grantResults = " + Arrays.toString(grantResults));
 
-        if (requestCode == REQUEST_RECORD_AUDIO_PERMISSION) {
+        if (requestCode == REQUEST_RECORD_AUDIO_ASR_PERMISSION) {
             boolean recordAudioPermissionGranted = isPermissionGranted(permissions, grantResults[0], new String[]{android.Manifest.permission.RECORD_AUDIO});
 //            boolean recordAudioPermissionGranted = false;
 //            // 检查请求的权限是否被授予
@@ -190,6 +204,23 @@ public class AppActivity extends CocosActivity {
             } else {
                 // 权限被拒绝，处理拒绝的情况
             }
+        }else if(requestCode == REQUEST_RECORD_AUDIO_FSR_PERMISSION){
+            boolean recordAudioPermissionGranted = isPermissionGranted(permissions, grantResults[0], new String[]{android.Manifest.permission.RECORD_AUDIO});
+            if(recordAudioPermissionGranted){
+                FSRManager.start(this);
+            } else{
+                // 权限被拒绝，处理拒绝的情况
+                JSONObject error = new JSONObject();
+                try {
+                    error.put("code", 1); // 1 表示权限被拒绝
+                    error.put("error", "permission denied");
+                } catch (JSONException e) {
+                    throw new RuntimeException(e);
+                }
+                JsbBridge.sendToScript("FSRResult", error.toString());
+            }
+
+
         }else if(requestCode == REQUEST_LOCATION_PERMISSION){
             Log.d("AppActivity", "check location permission");
 
