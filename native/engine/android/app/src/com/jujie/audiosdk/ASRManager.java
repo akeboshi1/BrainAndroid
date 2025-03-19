@@ -1,7 +1,7 @@
 package com.jujie.audiosdk;
 
 
-import static com.jujie.audiosdk.Constant.REQUEST_RECORD_AUDIO_PERMISSION;
+import static com.jujie.audiosdk.Constant.REQUEST_RECORD_AUDIO_ASR_PERMISSION;
 
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
@@ -46,7 +46,7 @@ public class ASRManager {
     public void startRecording(Context context, Map args) {
         if (ContextCompat.checkSelfPermission(context, android.Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             // 请求权限
-            ActivityCompat.requestPermissions((android.app.Activity) context, new String[]{android.Manifest.permission.RECORD_AUDIO}, REQUEST_RECORD_AUDIO_PERMISSION);
+            ActivityCompat.requestPermissions((android.app.Activity) context, new String[]{android.Manifest.permission.RECORD_AUDIO}, REQUEST_RECORD_AUDIO_ASR_PERMISSION);
             return;
         }
 
