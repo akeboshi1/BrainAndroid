@@ -68,13 +68,6 @@ public class AppActivity extends CocosActivity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
-        String androidId = Settings.Secure.getString(
-                this.getContentResolver(),
-                Settings.Secure.ANDROID_ID
-        );
-
-        Helper.uuid = androidId;
-
         // 启动日志捕获
         LogcatCapture.startCapturing();
 
@@ -158,6 +151,14 @@ public class AppActivity extends CocosActivity {
                 }
 
                 if(arg0.equals("DEVICE") && arg1.equals("info")){
+
+                    String androidId = Settings.Secure.getString(
+                            instance.getContentResolver(),
+                            Settings.Secure.ANDROID_ID
+                    );
+
+                    Helper.uuid = androidId;
+
                     HashMap<String, String> map = new HashMap<>();
                     map.put("deviceId", androidId);
 
