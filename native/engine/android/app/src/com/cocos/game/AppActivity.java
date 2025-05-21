@@ -59,6 +59,12 @@ import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
 
+import android.graphics.Color;
+import android.view.View;
+import android.view.ViewGroup;
+import android.view.FrameLayout;
+import android.os.Build;
+
 public class AppActivity extends CocosActivity {
     private Context instance;
     private Map<String, Object> args;
@@ -171,6 +177,39 @@ public class AppActivity extends CocosActivity {
 
             }
         });
+
+        // 彻底解决WebView白边问题 - 因为只用于音效，所以设为完全不可见
+        webView.setBackgroundColor(Color.TRANSPARENT);
+        webView.setOverScrollMode(View.OVER_SCROLL_NEVER);
+
+        // 设置尺寸为0，完全不占用显示空间
+        webView.setLayoutParams(new FrameLayout.LayoutParams(0, 0));
+        
+        // 将WebView设置为GONE，从视图层次结构中完全移除
+        webView.setVisibility(View.GONE);
+        
+        // 启用硬件加速
+        webView.setLayerType(View.LAYER_TYPE_HARDWARE, null);
+        
+        // 禁用滚动条
+        webView.setVerticalScrollBarEnabled(false);
+        webView.setHorizontalScrollBarEnabled(false);
+
+        // 设置WebView内容的边距为0
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
+            webView.evaluateJavascript(
+                    "(function() { " +
+                            "document.body.style.margin='0';" +
+                            "document.body.style.padding='0';" +
+                            "document.documentElement.style.margin='0';" +
+                            "document.documentElement.style.padding='0';" +
+                            "})();",
+                    null
+            );
+        }
+
+        // Log.d("AppActivity", "WebView Class: " + webView.getClass().getName());
+        // Log.d("AppActivity", "WebView Parent: " + webView.getParent());
     }
 
     @Override
