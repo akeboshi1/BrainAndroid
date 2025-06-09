@@ -14,6 +14,10 @@ android {
     ndkPath PROP_NDK_PATH
     namespace APPLICATION_ID
 
+    buildFeatures {
+        viewBinding true
+    }
+
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_1_8
         targetCompatibility JavaVersion.VERSION_1_8
@@ -23,8 +27,8 @@ android {
         applicationId APPLICATION_ID
         minSdkVersion PROP_MIN_SDK_VERSION
         targetSdkVersion PROP_TARGET_SDK_VERSION
-        versionCode 20241202
-        versionName "20241202"
+        versionCode 20241203
+        versionName "20241203"
 
         externalNativeBuild {
             cmake {
@@ -120,6 +124,7 @@ dependencies {
     implementation 'androidx.appcompat:appcompat:1.6.1'
     implementation "androidx.fragment:fragment-ktx:1.5.5"
 
+
 }
 
 configurations.all {
@@ -129,3 +134,4 @@ configurations.all {
         }
     }
 }
+

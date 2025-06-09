@@ -12,21 +12,18 @@ import android.util.Log;
 import android.widget.Button;
 import android.widget.Toast;
 
-import androidx.activity.result.ActivityResultLauncher;
 import androidx.appcompat.app.AppCompatActivity;
 
+import com.cocos.lib.JsbBridge;
 import com.google.zxing.BarcodeFormat;
 import com.google.zxing.BinaryBitmap;
 import com.google.zxing.RGBLuminanceSource;
 import com.google.zxing.Result;
 import com.google.zxing.common.HybridBinarizer;
-import com.journeyapps.barcodescanner.CaptureActivity;
+import com.journeyapps.barcodescanner.BarcodeResult;
 import com.journeyapps.barcodescanner.CaptureManager;
 import com.journeyapps.barcodescanner.DecoratedBarcodeView;
 import com.journeyapps.barcodescanner.DefaultDecoderFactory;
-import com.journeyapps.barcodescanner.ScanContract;
-import com.journeyapps.barcodescanner.ScanIntentResult;
-import com.journeyapps.barcodescanner.ScanOptions;
 
 import java.io.InputStream;
 import java.util.Arrays;
@@ -34,6 +31,7 @@ import java.util.List;
 
 public class PaipaiCaptureActivity extends AppCompatActivity {
     private DecoratedBarcodeView barcodeView; // 引用扫码视图
+    private CaptureManager captureManager; // 扫码管理器
 
     // 可以添加自定义功能或界面修改
     private static final int GALLERY_REQUEST_CODE = 101;
@@ -41,12 +39,18 @@ public class PaipaiCaptureActivity extends AppCompatActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        
+        // 设置为竖屏模式
+        setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_PORTRAIT);
 
         setContentView(com.jujie.paipai.R.layout.paipai_capture);
 
         // 设置按钮点击事件
         Button galleryButton = findViewById(com.jujie.paipai.R.id.gallery_button);
         galleryButton.setOnClickListener(v -> openGallery());
+        
+        Button closeButton = findViewById(com.jujie.paipai.R.id.close_button);
+        closeButton.setOnClickListener(v -> closeScanning());
 
 //        try {
 //            CameraManager cameraManager = null;
@@ -80,24 +84,16 @@ public class PaipaiCaptureActivity extends AppCompatActivity {
         barcodeView.initializeFromIntent(getIntent());
         barcodeView.getBarcodeView().decodeContinuous(result -> {
             // 实时扫描结果
-            Toast.makeText(this, "扫描结果：" + result.getText(), Toast.LENGTH_SHORT).show();
+            handleDirectScanResult(result);
         });
 
-        CaptureManager captureManager = new CaptureManager(this, barcodeView);
+        // 初始化扫码管理器
+        captureManager = new CaptureManager(this, barcodeView);
         captureManager.initializeFromIntent(getIntent(), savedInstanceState);
         captureManager.decode();
-        ScanOptions options = new ScanOptions();
-        options.setPrompt("请扫描条形码");
-
-        options.setDesiredBarcodeFormats(ScanOptions.ONE_D_CODE_TYPES);
-
-        ActivityResultLauncher<ScanOptions> scannerLauncher = registerForActivityResult(new ScanContract(), this::handleScanResult);
-        scannerLauncher.launch(options);
-
-//        Button galleryButton = findViewById(com.jujie.paipai.R.id.gallery_button);
-//        galleryButton.setOnClickListener(v -> openGallery());
-//
-        setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_PORTRAIT);
+        
+        // 启动扫码视图
+        barcodeView.resume();
 
     }
 
@@ -105,18 +101,70 @@ public class PaipaiCaptureActivity extends AppCompatActivity {
     protected void onResume() {
         super.onResume();
         setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_PORTRAIT);
-    }
-
-
-    private void handleScanResult(ScanIntentResult result) {
-        if (result.getContents() == null) {
-            Toast.makeText(this, "扫描被取消", Toast.LENGTH_SHORT).show();
-        } else {
-            Toast.makeText(this, "扫描结果" + result.getContents().toString(), Toast.LENGTH_SHORT).show();
-//            scannedValue.setText("扫描结果: " + result.getContents());
+        
+        // 启动扫码
+        if (captureManager != null) {
+            captureManager.onResume();
         }
     }
+    
+    @Override
+    protected void onPause() {
+        super.onPause();
+        
+        // 暂停扫码
+        if (captureManager != null) {
+            captureManager.onPause();
+        }
+        
+        // 暂停扫码视图
+        if (barcodeView != null) {
+            barcodeView.pause();
+        }
+    }
+    
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        
+        // 销毁扫码管理器
+        if (captureManager != null) {
+            captureManager.onDestroy();
+        }
+    }
+    
+    @Override
+    public void onBackPressed() {
+        // 处理返回键，设置取消结果
+        Intent resultIntent = new Intent();
+        resultIntent.putExtra("SCAN_RESULT", ""); // 添加空字符串防止空指针异常
+        setResult(RESULT_CANCELED, resultIntent);
+        super.onBackPressed();
+    }
 
+
+    private void handleDirectScanResult(BarcodeResult result) {
+        Log.d("CaptureActivity", "handleDirectScanResult: " + result.getText());
+        Toast.makeText(this, "扫描结果：" + result.getText(), Toast.LENGTH_SHORT).show();
+        JsbBridge.sendToScript("QRCODEResult", result.getText());
+        
+        // 设置返回结果
+        Intent resultIntent = new Intent();
+        resultIntent.putExtra("SCAN_RESULT", result.getText());
+        setResult(RESULT_OK, resultIntent);
+        finish(); // 关闭当前界面
+    }
+    
+
+
+    private void closeScanning() {
+        // 关闭扫码界面
+        Intent resultIntent = new Intent();
+        resultIntent.putExtra("SCAN_RESULT", ""); // 添加空字符串防止空指针异常
+        setResult(RESULT_CANCELED, resultIntent);
+        finish();
+    }
+    
     private void openGallery() {
         Intent galleryIntent = new Intent(Intent.ACTION_GET_CONTENT);
         galleryIntent.setType("image/*");
@@ -153,14 +201,26 @@ public class PaipaiCaptureActivity extends AppCompatActivity {
 
             Result result = new com.google.zxing.MultiFormatReader().decode(binaryBitmap);
 
+            Log.d("CaptureActivity", "decodeQRCodeFromImage: result=" + result);
+
             if (result != null) {
-                Toast.makeText(this, "从图片中解析的二维码结果：" + result.getText(), Toast.LENGTH_LONG).show();
+                Toast.makeText(this, "图片中二维码结果：" + result.getText(), Toast.LENGTH_LONG).show();
+                JsbBridge.sendToScript("QRCODEResult", result.getText());
+                
+                // 设置返回结果
+                Intent resultIntent = new Intent();
+                resultIntent.putExtra("SCAN_RESULT", result.getText());
+                setResult(RESULT_OK, resultIntent);
+                finish(); // 关闭当前界面
+
             } else {
                 Toast.makeText(this, "未能在图片中识别到二维码", Toast.LENGTH_SHORT).show();
             }
+
         } catch (Exception e) {
-            e.printStackTrace();
-            Toast.makeText(this, "解析二维码失败：" + e.getMessage(), Toast.LENGTH_LONG).show();
+//            e.printStackTrace();
+            Log.e("CaptureActivity", "decodeQRCodeFromImage: " + e.getMessage());
+            Toast.makeText(this, "解析二维码失败", Toast.LENGTH_LONG).show();
         }
     }
 

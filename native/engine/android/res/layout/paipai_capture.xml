@@ -8,17 +8,37 @@
         android:layout_width="match_parent"
         android:layout_height="match_parent" />
 
-    <Button
-        android:id="@+id/gallery_button"
+    <!-- 底部按钮容器 -->
+    <LinearLayout
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_alignParentBottom="true"
         android:layout_centerHorizontal="true"
         android:layout_marginBottom="16dp"
-        android:text="打开相册"
-        android:background="@android:color/holo_blue_light"
-        android:textColor="@android:color/white"
-        android:padding="12dp" />
+        android:orientation="horizontal">
+
+        <Button
+            android:id="@+id/gallery_button"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginEnd="8dp"
+            android:text="打开相册"
+            android:background="@android:color/holo_blue_light"
+            android:textColor="@android:color/white"
+            android:padding="12dp" />
+
+        <Button
+            android:id="@+id/close_button"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="8dp"
+            android:text="关闭"
+            android:background="@android:color/darker_gray"
+            android:textColor="@android:color/white"
+            android:padding="12dp"
+            android:minWidth="60dp" />
+
+    </LinearLayout>
 
 
 </RelativeLayout>
