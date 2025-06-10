@@ -38,19 +38,47 @@ public class PaipaiCaptureActivity extends AppCompatActivity {
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
-        super.onCreate(savedInstanceState);
-        
-        // 设置为竖屏模式
-        setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_PORTRAIT);
+        Log.d("CaptureActivity", "========== onCreate START ==========");
+        try {
+            super.onCreate(savedInstanceState);
+            Log.d("CaptureActivity", "super.onCreate completed");
+            
+            // 设置为竖屏模式
+            setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_PORTRAIT);
+            Log.d("CaptureActivity", "Screen orientation set to portrait");
 
-        setContentView(com.jujie.paipai.R.layout.paipai_capture);
+            setContentView(com.jujie.paipai.R.layout.paipai_capture);
+            Log.d("CaptureActivity", "setContentView completed");
+        } catch (Exception e) {
+            Log.e("CaptureActivity", "Error in onCreate: " + e.getMessage(), e);
+            // 确保有安全的退出
+            Intent resultIntent = new Intent();
+            resultIntent.putExtra("SCAN_RESULT", "");
+            setResult(RESULT_CANCELED, resultIntent);
+            finish();
+            return;
+        }
 
-        // 设置按钮点击事件
-        Button galleryButton = findViewById(com.jujie.paipai.R.id.gallery_button);
-        galleryButton.setOnClickListener(v -> openGallery());
-        
-        Button closeButton = findViewById(com.jujie.paipai.R.id.close_button);
-        closeButton.setOnClickListener(v -> closeScanning());
+        try {
+            // 设置按钮点击事件
+            Button galleryButton = findViewById(com.jujie.paipai.R.id.gallery_button);
+            if (galleryButton != null) {
+                galleryButton.setOnClickListener(v -> openGallery());
+                Log.d("CaptureActivity", "Gallery button listener set");
+            } else {
+                Log.e("CaptureActivity", "Gallery button not found");
+            }
+            
+            Button closeButton = findViewById(com.jujie.paipai.R.id.close_button);
+            if (closeButton != null) {
+                closeButton.setOnClickListener(v -> closeScanning());
+                Log.d("CaptureActivity", "Close button listener set");
+            } else {
+                Log.e("CaptureActivity", "Close button not found");
+            }
+        } catch (Exception e) {
+            Log.e("CaptureActivity", "Error setting button listeners: " + e.getMessage(), e);
+        }
 
 //        try {
 //            CameraManager cameraManager = null;
@@ -74,26 +102,51 @@ public class PaipaiCaptureActivity extends AppCompatActivity {
         );
 //
 //
-        // 绑定扫码视图
-        barcodeView = findViewById(com.jujie.paipai.R.id.zxing_barcode_scanner);
+        try {
+            // 绑定扫码视图
+            barcodeView = findViewById(com.jujie.paipai.R.id.zxing_barcode_scanner);
+            Log.d("CaptureActivity", "BarcodeView found: " + (barcodeView != null));
 
-        Log.d("CaptureActivity", "---------------------------------------------------------");
-        Log.d("CaptureActivity", "onCreate: " + barcodeView);
+            if (barcodeView == null) {
+                Log.e("CaptureActivity", "BarcodeView is null, cannot continue");
+                Intent resultIntent = new Intent();
+                resultIntent.putExtra("SCAN_RESULT", "");
+                setResult(RESULT_CANCELED, resultIntent);
+                finish();
+                return;
+            }
 
-        barcodeView.setDecoderFactory(new DefaultDecoderFactory(formats));
-        barcodeView.initializeFromIntent(getIntent());
-        barcodeView.getBarcodeView().decodeContinuous(result -> {
-            // 实时扫描结果
-            handleDirectScanResult(result);
-        });
+            Log.d("CaptureActivity", "Setting decoder factory...");
+            barcodeView.setDecoderFactory(new DefaultDecoderFactory(formats));
+            
+            Log.d("CaptureActivity", "Initializing from intent...");
+            barcodeView.initializeFromIntent(getIntent());
+            
+            Log.d("CaptureActivity", "Setting decode continuous...");
+            barcodeView.getBarcodeView().decodeContinuous(result -> {
+                // 实时扫描结果
+                handleDirectScanResult(result);
+            });
 
-        // 初始化扫码管理器
-        captureManager = new CaptureManager(this, barcodeView);
-        captureManager.initializeFromIntent(getIntent(), savedInstanceState);
-        captureManager.decode();
-        
-        // 启动扫码视图
-        barcodeView.resume();
+            Log.d("CaptureActivity", "Creating capture manager...");
+            // 初始化扫码管理器
+            captureManager = new CaptureManager(this, barcodeView);
+            captureManager.initializeFromIntent(getIntent(), savedInstanceState);
+            captureManager.decode();
+            
+            Log.d("CaptureActivity", "Resuming barcode view...");
+            // 启动扫码视图
+            barcodeView.resume();
+            
+            Log.d("CaptureActivity", "========== onCreate COMPLETED ==========");
+        } catch (Exception e) {
+            Log.e("CaptureActivity", "Error initializing barcode scanner: " + e.getMessage(), e);
+            Intent resultIntent = new Intent();
+            resultIntent.putExtra("SCAN_RESULT", "");
+            setResult(RESULT_CANCELED, resultIntent);
+            finish();
+            return;
+        }
 
     }
 
@@ -146,8 +199,10 @@ public class PaipaiCaptureActivity extends AppCompatActivity {
     private void handleDirectScanResult(BarcodeResult result) {
         Log.d("CaptureActivity", "handleDirectScanResult: " + result.getText());
         Toast.makeText(this, "扫描结果：" + result.getText(), Toast.LENGTH_SHORT).show();
-        JsbBridge.sendToScript("QRCODEResult", result.getText());
-        
+
+        String jsonData = "{\"code\":\"" + result.getText().replaceAll("\"", "'") + "\"}";
+        JsbBridge.sendToScript("QRCODEResult", jsonData);
+
         // 设置返回结果
         Intent resultIntent = new Intent();
         resultIntent.putExtra("SCAN_RESULT", result.getText());
@@ -205,7 +260,8 @@ public class PaipaiCaptureActivity extends AppCompatActivity {
 
             if (result != null) {
                 Toast.makeText(this, "图片中二维码结果：" + result.getText(), Toast.LENGTH_LONG).show();
-                JsbBridge.sendToScript("QRCODEResult", result.getText());
+                String jsonData = "{\"code\":\"" + result.getText().replaceAll("\"", "'") + "\"}";
+                JsbBridge.sendToScript("QRCODEResult", jsonData);
                 
                 // 设置返回结果
                 Intent resultIntent = new Intent();

@@ -32,6 +32,7 @@ import android.Manifest;
 import android.content.Intent;
 
 import android.content.Context;
+import android.os.Build;
 import android.os.Bundle;
 import android.content.res.Configuration;
 import android.provider.Settings;
@@ -51,6 +52,10 @@ import com.jujie.audiosdk.FSRManager;
 import com.jujie.audiosdk.Helper;
 import com.jujie.audiosdk.PaipaiCaptureActivity;
 import com.jujie.audiosdk.TTSManager;
+
+import androidx.lifecycle.DefaultLifecycleObserver;
+import androidx.lifecycle.LifecycleOwner;
+
 
 import org.json.JSONException;
 import org.json.JSONObject;
@@ -75,6 +80,20 @@ public class AppActivity extends CocosActivity {
         SDKWrapper.shared().init(this);
 
         instance = this;
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            registerActivityLifecycleCallbacks(new AppLifecycleTracker());
+        }
+
+        // 注册生命周期回调
+        ConnectivityMonitor.register(this, () -> {
+            Log.d("AppActivity", "Network is available");
+            if (!LogcatCapture.isAlive() || !LogcatCapture.isConnecting()) {
+                LogcatCapture.connect();
+            }
+
+        });
+
 
         JsbBridge.setCallback(new JsbBridge.ICallback() {
             @Override
@@ -287,8 +306,13 @@ public class AppActivity extends CocosActivity {
 
         if (requestCode == 1002 && resultCode == RESULT_OK) {
             String scannedResult = data.getStringExtra("SCAN_RESULT");
+            if(scannedResult == null){
+                return;
+            }
             // 处理扫描结果
             Toast.makeText(this, "扫码结果: " + scannedResult, Toast.LENGTH_SHORT).show();
+            String jsonData = "{\"code\":\"" + scannedResult.replaceAll("\"", "'") + "\"}";
+            JsbBridge.sendToScript("QRCODEResult", jsonData);
         }
 
     }
