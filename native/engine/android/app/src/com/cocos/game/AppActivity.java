@@ -300,6 +300,9 @@ public class AppActivity extends CocosActivity {
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         Log.d("AppActivity", "onActivityResult: requestCode = " + requestCode + ", resultCode = " + resultCode + ", data = " + data);
         Log.d("AppActivity",  data.getStringExtra("SCAN_RESULT"));
+        if(data == null){
+            return;
+        }
 
         super.onActivityResult(requestCode, resultCode, data);
         SDKWrapper.shared().onActivityResult(requestCode, resultCode, data);

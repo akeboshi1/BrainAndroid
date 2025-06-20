@@ -19,6 +19,8 @@ public class LogcatCapture {
     private static final ExecutorService executorService = Executors.newSingleThreadExecutor();
     private static boolean isCapturing = false;
     private static WebSocket webSocket;
+    private static WebSocketListener listener;
+    private static int wsStatus = 0; // 0: 未连接, 1: 连接中, 2: 已连接, 3: 关闭
 
 
     // 启动日志捕获
@@ -43,22 +45,30 @@ public class LogcatCapture {
         }
     }
 
+    public synchronized static void connect() {
+        if (isAlive()) return;
+        Log.d(TAG, "connect()");
+        webSocket = createNewWebSocket();
+    }
+
+
     // 停止日志捕获
     public static void stopCapturing() {
         isCapturing = false;
     }
 
-    private static WebSocket createNewWebSocket(){
+    private static WebSocket createNewWebSocket() {
 
         okhttp3.OkHttpClient client = new okhttp3.OkHttpClient();
         Request request = new Request.Builder().url("wss://test.paipai.xinjiaxianglao.com/cocos-monitor/").build();
-
-        return client.newWebSocket(request,
+        if( listener == null) {
+                listener =
                 new WebSocketListener() {
                     @Override
                     public void onOpen(WebSocket ws, okhttp3.Response response) {
                         super.onOpen(ws, response);
                         Log.d(TAG, "WebSocket 连接成功");
+                        wsStatus = 2; // 已连接
                     }
 
                     @Override
@@ -70,24 +80,32 @@ public class LogcatCapture {
                     public void onFailure(WebSocket ws, Throwable t, okhttp3.Response response) {
                         super.onFailure(ws, t, response);
                         Log.e(TAG, "WebSocket 错误: " + t.getMessage());
+                        wsStatus = 0; // 未连接
                     }
 
                     @Override
                     public void onClosed(WebSocket ws, int code, String reason) {
                         super.onClosed(ws, code, reason);
                         Log.d(TAG, "WebSocket 连接关闭: " + reason);
+                        wsStatus = 0;
+
 
                         // 10s 重新连接
-                        try {
-                            Thread.sleep(10000);
-                        } catch (InterruptedException e) {
-                            e.printStackTrace();
-                        }
+//                        try {
+//                            Thread.sleep(10000);
+//                        } catch (InterruptedException e) {
+//                            e.printStackTrace();
+//                        }
 
-                        webSocket = createNewWebSocket();
+//                        webSocket = createNewWebSocket();
+
 
                     }
-                }
+                };
+        }
+
+        return client.newWebSocket(request,
+                listener
         );
 
     }
@@ -95,6 +113,7 @@ public class LogcatCapture {
     // 捕获并处理日志
     private static void captureCocosLogs() {
         webSocket = createNewWebSocket();
+        wsStatus = 1; // 连接中
         try {
             // 通过 logcat 过滤出 tag=cocos 的日志
             Process process = Runtime.getRuntime().exec("logcat -v time -s Cocos");
@@ -178,15 +197,25 @@ public class LogcatCapture {
         Log.d("LogcatCapture", ">>> send log to server: level = " + level + ", message = [" + message + "]");
         Log.d("LogcatCapture", ">>> webSocket: " + webSocket);
 
-        if(webSocket != null) {
+        if(webSocket != null && isAlive()) {
             HashMap map = new HashMap();
             map.put("uuid", Helper.uuid);
             map.put("level", level);
             map.put("message", message);
+            map.put("timestamp", System.currentTimeMillis());
+
             String json = new org.json.JSONObject(map).toString();
 
             webSocket.send(json);
         }
+    }
+
+    public static Boolean isAlive(){
+        return wsStatus == 2;
+    }
+
+    public static Boolean isConnecting(){
+        return wsStatus == 1;
     }
 
 }
