@@ -29,6 +29,7 @@ import static com.jujie.audiosdk.Constant.REQUEST_RECORD_AUDIO_ASR_PERMISSION;
 import static com.jujie.audiosdk.Constant.REQUEST_RECORD_AUDIO_FSR_PERMISSION;
 
 import android.Manifest;
+import android.app.Activity;
 import android.content.Intent;
 
 import android.content.Context;
@@ -38,6 +39,11 @@ import android.content.res.Configuration;
 import android.provider.Settings;
 import android.telephony.TelephonyManager;
 import android.util.Log;
+import android.util.Size;
+import android.view.Gravity;
+import android.view.Surface;
+import android.view.View;
+import android.widget.FrameLayout;
 import androidx.annotation.NonNull;
 
 import android.content.pm.PackageManager;
@@ -52,26 +58,45 @@ import com.jujie.audiosdk.FSRManager;
 import com.jujie.audiosdk.Helper;
 import com.jujie.audiosdk.PaipaiCaptureActivity;
 import com.jujie.audiosdk.TTSManager;
+import com.jujie.rendersdk.CameraXManager;
+import com.jujie.rendersdk.ImageLayerManager;
 
 import androidx.lifecycle.DefaultLifecycleObserver;
 import androidx.lifecycle.LifecycleOwner;
-
+import androidx.lifecycle.LifecycleRegistry;
+import androidx.lifecycle.Lifecycle;
 
 import org.json.JSONException;
 import org.json.JSONObject;
+import org.json.JSONArray;
 
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
+import com.cocos.game.LogcatCapture;
+import androidx.core.app.ActivityCompat;
+import androidx.core.content.ContextCompat;
+import java.io.File;
 
-public class AppActivity extends CocosActivity {
-    private Context instance;
+public class AppActivity extends CocosActivity implements LifecycleOwner{
+    private Activity instance;
     private Map<String, Object> args;
     private TelephonyManager telephonyManager;
+    private CameraXManager cameraXManager;
+    private View cameraView;
+    private ImageLayerManager imageLayerManager;
+    private View overlayView;
+    
+    // 添加LifecycleRegistry成员变量
+    private LifecycleRegistry lifecycleRegistry;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+
+        // 初始化LifecycleRegistry
+        lifecycleRegistry = new LifecycleRegistry(this);
+        lifecycleRegistry.setCurrentState(Lifecycle.State.CREATED);
 
         // 启动日志捕获
         LogcatCapture.startCapturing();
@@ -166,7 +191,7 @@ public class AppActivity extends CocosActivity {
 
                     Log.d("AppActivity", "scan qrcode");
                     Intent intent = new Intent(instance, PaipaiCaptureActivity.class);
-                    startActivityForResult(intent, 1002);
+                   // instance.startActivityForResult(intent, 1002);
                 }
 
                 if(arg0.equals("DEVICE") && arg1.equals("info")){
@@ -187,7 +212,139 @@ public class AppActivity extends CocosActivity {
                     JsbBridge.sendToScript("DEVICEInfo", result);
                 }
 
+                if (arg0.equals("CAMERA") && arg1.equals("start")) {
+                    Log.d("AppActivity", "CAMERA start");
+                    // 确保在主线程中执行UI操作
+                    instance.runOnUiThread(() -> {
+                    if (cameraXManager == null) {
+                        cameraXManager = new CameraXManager(instance, (LifecycleOwner) instance);
+                        cameraView = cameraXManager.createCameraView();
+                        // 将相机视图添加到当前Activity的根布局中
+                        instance.addContentView(cameraView, new FrameLayout.LayoutParams(
+                            FrameLayout.LayoutParams.MATCH_PARENT,
+                            FrameLayout.LayoutParams.MATCH_PARENT
+                        ));
+                    }
+                    cameraXManager.showCameraPreview();
+                    });
+                }
 
+                if (arg0.equals("CAMERA") && arg1.equals("stop")) {
+                    Log.d("AppActivity", "CAMERA stop");
+                    // 确保在主线程中执行UI操作
+                    instance.runOnUiThread(() -> {
+                    if (cameraXManager != null) {
+                        cameraXManager.hideCameraPreview();
+                    }
+                    });
+                }
+
+                if (arg0.equals("CAMERA") && arg1.equals("getPremission")) {
+                    Log.d("AppActivity", "CAMERA getPermission");
+                    // 检查相机权限
+                    if (ContextCompat.checkSelfPermission(instance, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+                        ActivityCompat.requestPermissions(instance, new String[]{Manifest.permission.CAMERA}, 1003);
+                    } else {
+                        // 权限已授予，发送成功消息给脚本
+                        JSONObject result = new JSONObject();
+                        try {
+                            result.put("code", 0);
+                            result.put("message", "camera permission granted");
+                        } catch (JSONException e) {
+                            Log.e("AppActivity", "JSON error", e);
+                        }
+                        JsbBridge.sendToScript("CAMERAPermissionResult", result.toString());
+                    }
+                }
+                
+                if (arg0.equals("CAMERARECORDER") && arg1.equals("start")) {
+                    if (cameraXManager != null) {
+                        Log.d("AppActivity", "CAMERARECORDER start");
+                        cameraXManager.startRecording();
+                    } else {
+                        Log.e("AppActivity", "CameraXManager not initialized");
+                    }
+                }
+
+                if (arg0.equals("CAMERARECORDER") && arg1.equals("stop")) {
+                    Log.d("AppActivity", "CAMERARECORDER stop");
+                    if (cameraXManager != null) {
+                        cameraXManager.stopRecording();
+                    } else {
+                        Log.e("AppActivity", "CameraXManager not initialized");
+                    }
+                }
+
+                if (arg0.equals("CAMERARECORDER") && arg1.equals("stopWithoutSave")) {
+                    Log.d("AppActivity", "CAMERARECORDER stopWithoutSave");
+                    if (cameraXManager != null) {
+                        cameraXManager.stopRecordingWithoutSave();
+                    }
+                }
+
+                if (arg0.equals("CAMERAOVERLAY")) {
+                    Log.d("AppActivity", "CAMERAOVERLAY: " + arg1);
+                    // 确保在主线程中执行UI操作
+                    instance.runOnUiThread(() -> {
+                        // 使用单例模式获取 ImageLayerManager 实例
+                        imageLayerManager = ImageLayerManager.getInstance(instance);
+                        
+                        // 使用CameraXManager的容器
+                        if (cameraXManager != null) {
+                            FrameLayout cameraContainer = cameraXManager.getCameraContainer();
+                            if (cameraContainer != null) {
+                                overlayView = imageLayerManager.createOverlayView(cameraContainer);
+                                imageLayerManager.showOverlay(arg1);
+                            } else {
+                                Log.e("AppActivity", "Camera container is null");
+                            }
+                        } else {
+                            Log.e("AppActivity", "CameraXManager is null, please start camera first");
+                        }
+                    });
+                }
+
+                if (arg0.equals("CAMERAOVERLAYHIDE")) {
+                    Log.d("AppActivity", "CAMERAOVERLAYHIDE");
+                    // 确保在主线程中执行UI操作
+                    instance.runOnUiThread(() -> {
+                        // 使用单例模式获取 ImageLayerManager 实例
+                        ImageLayerManager manager = ImageLayerManager.getInstance(instance);
+                        if (manager != null) {
+                            manager.hideOverlay();
+                        }
+                    });
+                }
+
+                if (arg0.equals("POSTVIDEO")) {
+                    Log.d("AppActivity", "POSTVIDEO: " + arg1);
+                    //arg1是json字符串
+                    try {
+                        JSONObject jsonObject = new JSONObject(arg1);
+                        String absolutePath = jsonObject.getString("absolutePath");
+                        String task_id = jsonObject.getString("task_id");
+                        String token = jsonObject.getString("token");
+                        int group_size = jsonObject.getInt("group_size");
+
+                        Log.d("AppActivity", "absolutePath: " + absolutePath);
+                        Log.d("AppActivity", "task_id: " + task_id);
+                        Log.d("AppActivity", "token: " + token);
+                        Log.d("AppActivity", "group_size: " + group_size);
+
+                        PostVideoData.postVideoForScore(new File(absolutePath), task_id, token, group_size);
+                    } catch (JSONException e) {
+                        Log.e("AppActivity", "POSTVIDEO JSON parse error: " + e.getMessage());
+                        // 发送错误消息给脚本
+                        JSONObject error = new JSONObject();
+                        try {
+                            error.put("code", 1);
+                            error.put("message", "JSON parse error: " + e.getMessage());
+                        } catch (JSONException je) {
+                            Log.e("AppActivity", "Error creating error JSON", je);
+                        }
+                        JsbBridge.sendToScript("POSTVIDEODATAERROR", error.toString());
+                    }
+                }
             }
         });
     }
@@ -258,6 +415,26 @@ public class AppActivity extends CocosActivity {
                 // 权限被拒绝，处理拒绝的情况
             }
 
+        }else if(requestCode == 1003){
+            Log.d("AppActivity", "check camera permission");
+            
+            boolean cameraPermissionGranted = isPermissionGranted(permissions, grantResults[0], new String[]{Manifest.permission.CAMERA});
+            
+            Log.d("AppActivity", "cameraPermissionGranted = " + cameraPermissionGranted);
+            
+            JSONObject result = new JSONObject();
+            try {
+                if (cameraPermissionGranted) {
+                    result.put("code", 0);
+                    result.put("message", "camera permission granted");
+                } else {
+                    result.put("code", 1);
+                    result.put("message", "camera permission denied");
+                }
+            } catch (JSONException e) {
+                Log.e("AppActivity", "JSON error", e);
+            }
+            JsbBridge.sendToScript("CAMERAPermissionResult", result.toString());
         }
     }
 
@@ -277,18 +454,30 @@ public class AppActivity extends CocosActivity {
     @Override
     protected void onResume() {
         super.onResume();
+        lifecycleRegistry.setCurrentState(Lifecycle.State.RESUMED);
         SDKWrapper.shared().onResume();
     }
 
     @Override
     protected void onPause() {
         super.onPause();
+        lifecycleRegistry.setCurrentState(Lifecycle.State.STARTED);
         SDKWrapper.shared().onPause();
     }
 
     @Override
     protected void onDestroy() {
         super.onDestroy();
+        lifecycleRegistry.setCurrentState(Lifecycle.State.DESTROYED);
+        
+        // 清理ImageLayerManager单例
+        ImageLayerManager.clearInstance();
+        imageLayerManager = null;
+        overlayView = null;
+        
+        // 注销网络监控器，避免内存泄漏
+        ConnectivityMonitor.unregister(this);
+        
         // Workaround in https://stackoverflow.com/questions/16283079/re-launch-of-activity-on-home-button-but-only-the-first-time/16447508
         if (!isTaskRoot()) {
             return;
@@ -299,10 +488,13 @@ public class AppActivity extends CocosActivity {
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         Log.d("AppActivity", "onActivityResult: requestCode = " + requestCode + ", resultCode = " + resultCode + ", data = " + data);
-        Log.d("AppActivity",  data.getStringExtra("SCAN_RESULT"));
+        
         if(data == null){
+            Log.d("AppActivity", "data is null");
             return;
         }
+        
+        Log.d("AppActivity", "SCAN_RESULT: " + data.getStringExtra("SCAN_RESULT"));
 
         super.onActivityResult(requestCode, resultCode, data);
         SDKWrapper.shared().onActivityResult(requestCode, resultCode, data);
@@ -335,6 +527,7 @@ public class AppActivity extends CocosActivity {
     @Override
     protected void onStop() {
         super.onStop();
+        lifecycleRegistry.setCurrentState(Lifecycle.State.CREATED);
         SDKWrapper.shared().onStop();
     }
 
@@ -364,8 +557,9 @@ public class AppActivity extends CocosActivity {
 
     @Override
     protected void onStart() {
-        SDKWrapper.shared().onStart();
         super.onStart();
+        lifecycleRegistry.setCurrentState(Lifecycle.State.STARTED);
+        SDKWrapper.shared().onStart();
     }
 
     @Override
@@ -472,5 +666,9 @@ public class AppActivity extends CocosActivity {
 
     }
 
-
+    // 实现LifecycleOwner接口的getLifecycle方法
+    @Override
+    public Lifecycle getLifecycle() {
+        return lifecycleRegistry;
+    }
 }
