@@ -16,6 +16,10 @@ import androidx.camera.core.CameraSelector;
 import androidx.camera.core.Preview;
 import androidx.camera.core.UseCaseGroup;
 import androidx.camera.core.ViewPort;
+import androidx.camera.core.impl.UseCaseConfigFactory;
+import androidx.camera.core.resolutionselector.AspectRatioStrategy;
+import androidx.camera.core.resolutionselector.ResolutionFilter;
+import androidx.camera.core.resolutionselector.ResolutionSelector;
 import androidx.camera.lifecycle.ProcessCameraProvider;
 import androidx.camera.video.FileOutputOptions;
 import androidx.camera.video.Quality;
@@ -38,6 +42,7 @@ import java.util.Timer;
 import java.util.TimerTask;
 import com.cocos.lib.JsbBridge;
 import org.json.JSONObject;
+import android.graphics.drawable.GradientDrawable;
 
 public class CameraXManager {
     private static final String TAG = "CameraXManager";
@@ -63,6 +68,7 @@ public class CameraXManager {
     private ProcessCameraProvider cameraProvider;
     private FrameLayout cameraContainer;
     private boolean saveFlag = true;
+
     public CameraXManager(Activity activity, LifecycleOwner lifecycleOwner) {
         this.activity = activity;
         this.lifecycleOwner = lifecycleOwner;
@@ -147,7 +153,7 @@ public class CameraXManager {
         );
         rootLayout.setLayoutParams(rootParams);
         rootLayout.setBackgroundColor(Color.TRANSPARENT);
-        
+
         // 创建相机预览容器
         cameraContainer = new FrameLayout(activity);
         FrameLayout.LayoutParams cameraParams = new FrameLayout.LayoutParams(
@@ -193,26 +199,21 @@ public class CameraXManager {
             try {
                 cameraProvider = cameraProviderFuture.get();
 
-                Preview preview = new Preview.Builder().setTargetResolution(new Size(640,360))
-                    .build();
+                ResolutionSelector resolutionSelector = new ResolutionSelector.Builder().setAspectRatioStrategy(new AspectRatioStrategy(AspectRatio.RATIO_4_3,AspectRatioStrategy.FALLBACK_RULE_AUTO)).build();
+
+                Preview preview = new Preview.Builder().setResolutionSelector(resolutionSelector).build();
                 preview.setSurfaceProvider(previewView.getSurfaceProvider());
 
                 Recorder recorder = new Recorder.Builder()
-                        .setQualitySelector(QualitySelector.from(Quality.SD))
+                        .setQualitySelector(QualitySelector.from(Quality.LOWEST))
                         .build();
                 videoCapture = VideoCapture.withOutput(recorder);
 
                 CameraSelector cameraSelector = CameraSelector.DEFAULT_FRONT_CAMERA;
 
-                ViewPort viewPort = new ViewPort.Builder(
-                        new android.util.Rational(16, 9),
-                        Surface.ROTATION_90
-                ).build();
-
                 UseCaseGroup useCaseGroup = new UseCaseGroup.Builder()
                         .addUseCase(preview)
                         .addUseCase(videoCapture)
-                        .setViewPort(viewPort)
                         .build();
 
                 cameraProvider.unbindAll();
