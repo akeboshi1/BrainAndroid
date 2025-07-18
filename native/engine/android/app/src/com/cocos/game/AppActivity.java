@@ -191,7 +191,8 @@ public class AppActivity extends CocosActivity implements LifecycleOwner{
 
                     Log.d("AppActivity", "scan qrcode");
                     Intent intent = new Intent(instance, PaipaiCaptureActivity.class);
-                   // instance.startActivityForResult(intent, 1002);
+                    // instance.startActivityForResult(intent, 1002);
+                    startActivityForResult(intent, 1002);
                 }
 
                 if(arg0.equals("DEVICE") && arg1.equals("info")){
