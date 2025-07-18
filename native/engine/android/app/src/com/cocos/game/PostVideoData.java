@@ -9,9 +9,9 @@ import com.cocos.lib.JsbBridge;
 
 public class PostVideoData {
     // 上传视频并获取评分，出错返回60
-    public static Result postVideoForScore(File videoFile, String task_id, String token, int group_size) {
+    public static Result postVideoForScore(File videoFile, String activity_id, String token, int group_size) {
         Log.d("PostVideoData", "开始上传视频评分 - 文件: " + videoFile.getName() + ", 大小: " + videoFile.length() + " bytes");
-        Log.d("PostVideoData", "参数 - task_id: " + task_id + ", token: " + token + ", group_size: " + group_size);
+        Log.d("PostVideoData", "参数 - activity_id: " + activity_id + ", token: " + token + ", group_size: " + group_size);
         
         String boundary = "----WebKitFormBoundary" + System.currentTimeMillis();
         String LINE_FEED = "\r\n";
@@ -34,11 +34,11 @@ public class PostVideoData {
             Log.d("PostVideoData", "开始写入请求数据...");
             outputStream = new DataOutputStream(conn.getOutputStream());
             
-            // 写入 task_id 参数
+            // 写入 activity_id 参数
             String taskIdPart = "--" + boundary + LINE_FEED
-                    + "Content-Disposition: form-data; name=\"task_id\"" + LINE_FEED
+                    + "Content-Disposition: form-data; name=\"activity_id\"" + LINE_FEED
                     + LINE_FEED
-                    + task_id + LINE_FEED;
+                    + activity_id + LINE_FEED;
             outputStream.writeBytes(taskIdPart);
             
             // 写入 token 参数
@@ -104,7 +104,7 @@ public class PostVideoData {
                 if (data != null) {
                     int avgLeftScore = data.optInt("avg_left_score", 60);
                     int avgRightScore = data.optInt("avg_right_score", 60);
-                    String taskId = data.optString("task_id", "");
+                    String taskId = data.optString("activity_id", "");
                     filename = data.optString("filename", "");
                     
                     Log.d("PostVideoData", "解析成功 - avgLeftScore: " + avgLeftScore + ", avgRightScore: " + avgRightScore);
