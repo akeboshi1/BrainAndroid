@@ -285,6 +285,11 @@ public class AppActivity extends CocosActivity implements LifecycleOwner{
 
                 if (arg0.equals("CAMERAOVERLAY")) {
                     Log.d("AppActivity", "CAMERAOVERLAY: " + arg1);
+                    String[] paths = arg1.split(",", -1); // -1 保证分割后即使末尾为空也保留
+                    String topPath = paths.length > 0 ? paths[0] : null;
+                    String bottomPath = (paths.length > 1 && !paths[1].isEmpty()) ? paths[1] : null;
+                    Log.d("AppActivity", "topPath: " + topPath);
+                    Log.d("AppActivity", "bottomPath: " + bottomPath);
                     // 确保在主线程中执行UI操作
                     instance.runOnUiThread(() -> {
                         // 使用单例模式获取 ImageLayerManager 实例
@@ -295,7 +300,7 @@ public class AppActivity extends CocosActivity implements LifecycleOwner{
                             FrameLayout cameraContainer = cameraXManager.getCameraContainer();
                             if (cameraContainer != null) {
                                 overlayView = imageLayerManager.createOverlayView(cameraContainer);
-                                imageLayerManager.showOverlay(arg1);
+                                imageLayerManager.showOverlay(topPath, bottomPath);
                             } else {
                                 Log.e("AppActivity", "Camera container is null");
                             }

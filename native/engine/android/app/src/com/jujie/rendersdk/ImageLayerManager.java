@@ -49,6 +49,9 @@ public class ImageLayerManager {
     private boolean isVisible = false;
     private FrameLayout parentContainer;
     
+    private ImageView overlayImageViewTop;    // 顶层图片
+    private ImageView overlayImageViewBottom; // 底层图片
+    
     public ImageLayerManager(Activity activity) {
         this.activity = activity;
     }
@@ -145,38 +148,70 @@ public class ImageLayerManager {
         imageView.setLayoutParams(imageParams);
         imageView.setVisibility(View.GONE);
         
-        // 直接添加到父容器中
-        parentContainer.addView(imageView);
+        // 创建底层ImageView
+        overlayImageViewBottom = new ImageView(activity);
+        overlayImageViewBottom.setLayoutParams(imageParams);
+        overlayImageViewBottom.setVisibility(View.GONE);
+
+        // 创建顶层ImageView
+        overlayImageViewTop = new ImageView(activity);
+        overlayImageViewTop.setLayoutParams(imageParams);
+        overlayImageViewTop.setVisibility(View.GONE);
+
+        // 先添加底层，再添加顶层，保证叠加顺序
+        parentContainer.addView(overlayImageViewBottom);
+        parentContainer.addView(overlayImageViewTop);
+
+        overlayView = overlayImageViewTop; // 兼容旧逻辑
         
-        overlayView = imageView;
         Log.d(TAG, "New overlay view created and added to container");
         return overlayView;
     }
     
-    public void showOverlay(String assetPath) {
-        if (overlayView == null) {
-            Log.e(TAG, "Overlay view not initialized");
+    public void showOverlay(String topAssetPath, String bottomAssetPath) {
+        if (overlayImageViewTop == null || overlayImageViewBottom == null) {
+            Log.e(TAG, "Overlay views not initialized");
             return;
         }
         
         activity.runOnUiThread(() -> {
             try {
-                // 加载图片 - 使用正确的assets路径
-                String fullPath = "assets/main/native/" + assetPath.substring(0, 2) + "/" + assetPath + ".png";
-                Log.d(TAG, "Loading image from: " + fullPath);
-                
-                Bitmap bitmap = loadBitmapFromAssets(activity, fullPath);
-                if (bitmap != null) {
-                    // 设置图片并显示
-                    ((ImageView) overlayView).setImageBitmap(bitmap);
-                    overlayView.setVisibility(View.VISIBLE);
-                    isVisible = true;
-                    currentImagePath = assetPath;
-                    
-                    Log.d(TAG, "Image overlay shown successfully");
+                // 加载底层图片
+                if (bottomAssetPath != null && !bottomAssetPath.isEmpty()) {
+                    String bottomFullPath = "assets/main/native/" + bottomAssetPath.substring(0, 2) + "/" + bottomAssetPath + ".png";
+                    Bitmap bottomBitmap = loadBitmapFromAssets(activity, bottomFullPath);
+                    if (bottomBitmap != null) {
+                        overlayImageViewBottom.setImageBitmap(bottomBitmap);
+                        overlayImageViewBottom.setVisibility(View.VISIBLE);
+                    } else {
+                        overlayImageViewBottom.setImageBitmap(null);
+                        overlayImageViewBottom.setVisibility(View.GONE);
+                    }
                 } else {
-                    Log.e(TAG, "Failed to load image: " + fullPath);
+                    overlayImageViewBottom.setImageBitmap(null);
+                    overlayImageViewBottom.setVisibility(View.GONE);
                 }
+
+                // 加载顶层图片
+                if (topAssetPath != null && !topAssetPath.isEmpty()) {
+                    String topFullPath = "assets/main/native/" + topAssetPath.substring(0, 2) + "/" + topAssetPath + ".png";
+                    Bitmap topBitmap = loadBitmapFromAssets(activity, topFullPath);
+                    if (topBitmap != null) {
+                        overlayImageViewTop.setImageBitmap(topBitmap);
+                        overlayImageViewTop.setVisibility(View.VISIBLE);
+                    } else {
+                        overlayImageViewTop.setImageBitmap(null);
+                        overlayImageViewTop.setVisibility(View.GONE);
+                    }
+                } else {
+                    overlayImageViewTop.setImageBitmap(null);
+                    overlayImageViewTop.setVisibility(View.GONE);
+                }
+
+                isVisible = (overlayImageViewTop.getVisibility() == View.VISIBLE) || (overlayImageViewBottom.getVisibility() == View.VISIBLE);
+                currentImagePath = topAssetPath + (bottomAssetPath != null ? ("+" + bottomAssetPath) : "");
+                
+                Log.d(TAG, "Image overlay shown successfully");
             } catch (Exception e) {
                 Log.e(TAG, "Error showing overlay", e);
             }
@@ -184,14 +219,16 @@ public class ImageLayerManager {
     }
     
     public void hideOverlay() {
-        if (overlayView == null) {
-            Log.e(TAG, "Overlay view not initialized");
+        if (overlayImageViewTop == null || overlayImageViewBottom == null) {
+            Log.e(TAG, "Overlay views not initialized");
             return;
         }
         
         activity.runOnUiThread(() -> {
-            overlayView.setVisibility(View.GONE);
-            ((ImageView) overlayView).setImageBitmap(null);
+            overlayImageViewTop.setVisibility(View.GONE);
+            overlayImageViewTop.setImageBitmap(null);
+            overlayImageViewBottom.setVisibility(View.GONE);
+            overlayImageViewBottom.setImageBitmap(null);
             isVisible = false;
             
             Log.d(TAG, "Image overlay hidden");
