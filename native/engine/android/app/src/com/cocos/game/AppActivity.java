@@ -337,7 +337,10 @@ public class AppActivity extends CocosActivity implements LifecycleOwner{
                         Log.d("AppActivity", "token: " + token);
                         Log.d("AppActivity", "group_size: " + group_size);
 
-                        PostVideoData.postVideoForScore(new File(absolutePath), activity_id, token, group_size);
+                        // 在后台线程中执行视频上传，避免阻塞主线程
+                        new Thread(() -> {
+                            PostVideoData.postVideoForScore(new File(absolutePath), activity_id, token, group_size);
+                        }).start();
                     } catch (JSONException e) {
                         Log.e("AppActivity", "POSTVIDEO JSON parse error: " + e.getMessage());
                         // 发送错误消息给脚本
