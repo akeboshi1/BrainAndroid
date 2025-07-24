@@ -275,7 +275,7 @@ public class AppActivity extends CocosActivity implements LifecycleOwner{
                     JsbBridge.sendToScript("DEVICEInfo", result);
                 }
 
-                if (arg0.equals("WXPAY")) {
+                if (arg0.equals("PAYMENT:WXPAY")) {
 
                     Log.d("AppActivity", "WXPAY script: " + arg1);
                     HashMap order = new HashMap();
