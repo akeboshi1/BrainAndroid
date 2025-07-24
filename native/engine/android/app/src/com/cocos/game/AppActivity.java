@@ -1,27 +1,27 @@
 /****************************************************************************
-Copyright (c) 2015-2016 Chukong Technologies Inc.
-Copyright (c) 2017-2018 Xiamen Yaji Software Co., Ltd.
+ Copyright (c) 2015-2016 Chukong Technologies Inc.
+ Copyright (c) 2017-2018 Xiamen Yaji Software Co., Ltd.
 
-http://www.cocos2d-x.org
+ http://www.cocos2d-x.org
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+ Permission is hereby granted, free of charge, to any person obtaining a copy
+ of this software and associated documentation files (the "Software"), to deal
+ in the Software without restriction, including without limitation the rights
+ to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ copies of the Software, and to permit persons to whom the Software is
+ furnished to do so, subject to the following conditions:
 
-The above copyright notice and this permission notice shall be included in
-all copies or substantial portions of the Software.
+ The above copyright notice and this permission notice shall be included in
+ all copies or substantial portions of the Software.
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-THE SOFTWARE.
-****************************************************************************/
+ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+ THE SOFTWARE.
+ ****************************************************************************/
 package com.cocos.game;
 
 import static com.jujie.audiosdk.Constant.REQUEST_LOCATION_PERMISSION;
@@ -33,6 +33,9 @@ import android.app.Activity;
 import android.content.Intent;
 
 import android.content.Context;
+import android.content.pm.PackageInfo;
+import android.content.pm.Signature;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.content.res.Configuration;
@@ -48,6 +51,11 @@ import androidx.annotation.NonNull;
 
 import android.content.pm.PackageManager;
 import android.widget.Toast;
+
+import com.tencent.mm.opensdk.modelbiz.WXLaunchMiniProgram;
+import com.tencent.mm.opensdk.openapi.IWXAPI;
+import com.tencent.mm.opensdk.openapi.WXAPIFactory;
+
 
 import com.cocos.lib.JsbBridge;
 import com.cocos.service.SDKWrapper;
@@ -70,6 +78,7 @@ import org.json.JSONException;
 import org.json.JSONObject;
 import org.json.JSONArray;
 
+import java.security.MessageDigest;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
@@ -82,16 +91,69 @@ public class AppActivity extends CocosActivity implements LifecycleOwner{
     private Activity instance;
     private Map<String, Object> args;
     private TelephonyManager telephonyManager;
+    private IWXAPI api;
+
     private CameraXManager cameraXManager;
     private View cameraView;
     private ImageLayerManager imageLayerManager;
     private View overlayView;
-    
+
     // 添加LifecycleRegistry成员变量
     private LifecycleRegistry lifecycleRegistry;
 
+
+    private String bytesToHex(byte[] bytes) {
+        final char[] hexArray = "0123456789ABCDEF".toCharArray();
+        char[] hexChars = new char[bytes.length * 2];
+        for (int j = 0; j < bytes.length; j++) {
+            int v = bytes[j] & 0xFF;
+            hexChars[j * 2] = hexArray[v >>> 4];
+            hexChars[j * 2 + 1] = hexArray[v & 0x0F];
+        }
+        return new String(hexChars);
+    }
+
+    private void sendWXMiniReq(String path) {
+        try {
+            PackageInfo packageInfo = getPackageManager().getPackageInfo(getPackageName(), PackageManager.GET_SIGNATURES);
+            for (Signature signature : packageInfo.signatures) {
+                MessageDigest md = MessageDigest.getInstance("MD5");
+                md.update(signature.toByteArray());
+                String md5Signature = bytesToHex(md.digest()); // 这是你要填的
+                Log.d("MD5_SIGNATURE", md5Signature);
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+
+        WXLaunchMiniProgram.Req req = new WXLaunchMiniProgram.Req();
+        req.userName = "gh_965f61b76764"; // 这是小程序的原始 ID
+        req.path = path;             // 小程序内页面路径
+        req.miniprogramType = WXLaunchMiniProgram.Req.MINIPROGRAM_TYPE_PREVIEW;
+        api.sendReq(req);
+
+    }
+
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
+
+        Uri uri = getIntent().getData();
+        if (uri != null && "paipai".equals(uri.getScheme())) {
+            String target = uri.getQueryParameter("target");
+
+            Log.d("AppActivity", "Received URI: " + uri.toString());
+            Log.d("AppActivity", "Target: " + target);
+
+            if ("home".equals(target)) {
+                Intent intent = new Intent(this, AppActivity.class);
+                startActivity(intent);
+                finish();
+            }
+        }
+        api = WXAPIFactory.createWXAPI(this, "wx763bc34e94cf5aaf", false);
+        api.registerApp("wx763bc34e94cf5aaf");
+
         super.onCreate(savedInstanceState);
 
         // 初始化LifecycleRegistry
@@ -213,20 +275,34 @@ public class AppActivity extends CocosActivity implements LifecycleOwner{
                     JsbBridge.sendToScript("DEVICEInfo", result);
                 }
 
+                if (arg0.equals("WXPAY")) {
+
+                    Log.d("AppActivity", "WXPAY script: " + arg1);
+                    HashMap order = new HashMap();
+                    try {
+                        JSONObject jsonObject = new JSONObject(arg1);
+                        order.put("order_id", jsonObject.getString("order_id"));
+//                        order.put("order_amount", jsonObject.getString("order_amount"));
+                    } catch (JSONException e) {
+                        Log.e("AppActivity", "parse wxpay json fail.");
+                    }
+                    sendWXMiniReq("/pages/orders/index?order_id=" + order.get("order_id"));
+                }
+
                 if (arg0.equals("CAMERA") && arg1.equals("start")) {
                     Log.d("AppActivity", "CAMERA start");
                     // 确保在主线程中执行UI操作
                     instance.runOnUiThread(() -> {
-                    if (cameraXManager == null) {
-                        cameraXManager = new CameraXManager(instance, (LifecycleOwner) instance);
-                        cameraView = cameraXManager.createCameraView();
-                        // 将相机视图添加到当前Activity的根布局中
-                        instance.addContentView(cameraView, new FrameLayout.LayoutParams(
-                            FrameLayout.LayoutParams.MATCH_PARENT,
-                            FrameLayout.LayoutParams.MATCH_PARENT
-                        ));
-                    }
-                    cameraXManager.showCameraPreview();
+                        if (cameraXManager == null) {
+                            cameraXManager = new CameraXManager(instance, (LifecycleOwner) instance);
+                            cameraView = cameraXManager.createCameraView();
+                            // 将相机视图添加到当前Activity的根布局中
+                            instance.addContentView(cameraView, new FrameLayout.LayoutParams(
+                                    FrameLayout.LayoutParams.MATCH_PARENT,
+                                    FrameLayout.LayoutParams.MATCH_PARENT
+                            ));
+                        }
+                        cameraXManager.showCameraPreview();
                     });
                 }
 
@@ -234,9 +310,9 @@ public class AppActivity extends CocosActivity implements LifecycleOwner{
                     Log.d("AppActivity", "CAMERA stop");
                     // 确保在主线程中执行UI操作
                     instance.runOnUiThread(() -> {
-                    if (cameraXManager != null) {
-                        cameraXManager.hideCameraPreview();
-                    }
+                        if (cameraXManager != null) {
+                            cameraXManager.hideCameraPreview();
+                        }
                     });
                 }
 
@@ -257,7 +333,7 @@ public class AppActivity extends CocosActivity implements LifecycleOwner{
                         JsbBridge.sendToScript("CAMERAPermissionResult", result.toString());
                     }
                 }
-                
+
                 if (arg0.equals("CAMERARECORDER") && arg1.equals("start")) {
                     if (cameraXManager != null) {
                         Log.d("AppActivity", "CAMERARECORDER start");
@@ -294,7 +370,7 @@ public class AppActivity extends CocosActivity implements LifecycleOwner{
                     instance.runOnUiThread(() -> {
                         // 使用单例模式获取 ImageLayerManager 实例
                         imageLayerManager = ImageLayerManager.getInstance(instance);
-                        
+
                         // 使用CameraXManager的容器
                         if (cameraXManager != null) {
                             FrameLayout cameraContainer = cameraXManager.getCameraContainer();
@@ -426,11 +502,11 @@ public class AppActivity extends CocosActivity implements LifecycleOwner{
 
         }else if(requestCode == 1003){
             Log.d("AppActivity", "check camera permission");
-            
+
             boolean cameraPermissionGranted = isPermissionGranted(permissions, grantResults[0], new String[]{Manifest.permission.CAMERA});
-            
+
             Log.d("AppActivity", "cameraPermissionGranted = " + cameraPermissionGranted);
-            
+
             JSONObject result = new JSONObject();
             try {
                 if (cameraPermissionGranted) {
@@ -478,15 +554,15 @@ public class AppActivity extends CocosActivity implements LifecycleOwner{
     protected void onDestroy() {
         super.onDestroy();
         lifecycleRegistry.setCurrentState(Lifecycle.State.DESTROYED);
-        
+
         // 清理ImageLayerManager单例
         ImageLayerManager.clearInstance();
         imageLayerManager = null;
         overlayView = null;
-        
+
         // 注销网络监控器，避免内存泄漏
         ConnectivityMonitor.unregister(this);
-        
+
         // Workaround in https://stackoverflow.com/questions/16283079/re-launch-of-activity-on-home-button-but-only-the-first-time/16447508
         if (!isTaskRoot()) {
             return;
@@ -497,12 +573,12 @@ public class AppActivity extends CocosActivity implements LifecycleOwner{
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         Log.d("AppActivity", "onActivityResult: requestCode = " + requestCode + ", resultCode = " + resultCode + ", data = " + data);
-        
+        Log.d("AppActivity",  data.getStringExtra("SCAN_RESULT"));
         if(data == null){
             Log.d("AppActivity", "data is null");
             return;
         }
-        
+
         Log.d("AppActivity", "SCAN_RESULT: " + data.getStringExtra("SCAN_RESULT"));
 
         super.onActivityResult(requestCode, resultCode, data);
@@ -523,6 +599,8 @@ public class AppActivity extends CocosActivity implements LifecycleOwner{
 
     @Override
     protected void onNewIntent(Intent intent) {
+        Log.e("SCHEME", "onNewIntent: " + intent.getDataString());
+
         super.onNewIntent(intent);
         SDKWrapper.shared().onNewIntent(intent);
     }
