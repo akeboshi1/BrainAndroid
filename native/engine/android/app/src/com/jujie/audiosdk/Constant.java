@@ -13,4 +13,8 @@ public class Constant {
 
     // 录音权限-FSR
     public static final int REQUEST_RECORD_AUDIO_FSR_PERMISSION = 1100;
+
+    // 二维码摄像头
+    public static final int REQUEST_RECORD_CAMERA_PERMISSION = 1005;
+
 }

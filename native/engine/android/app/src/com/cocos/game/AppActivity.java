@@ -27,6 +27,7 @@ package com.cocos.game;
 import static com.jujie.audiosdk.Constant.REQUEST_LOCATION_PERMISSION;
 import static com.jujie.audiosdk.Constant.REQUEST_RECORD_AUDIO_ASR_PERMISSION;
 import static com.jujie.audiosdk.Constant.REQUEST_RECORD_AUDIO_FSR_PERMISSION;
+import static com.jujie.audiosdk.Constant.REQUEST_RECORD_CAMERA_PERMISSION;
 
 import android.Manifest;
 import android.app.Activity;
@@ -251,10 +252,16 @@ public class AppActivity extends CocosActivity implements LifecycleOwner{
 
                 if(arg0.equals("QRCODE") && arg1.equals("scan")){
 
-                    Log.d("AppActivity", "scan qrcode");
-                    Intent intent = new Intent(instance, PaipaiCaptureActivity.class);
-                    // instance.startActivityForResult(intent, 1002);
-                    startActivityForResult(intent, 1002);
+                    if (ContextCompat.checkSelfPermission(instance, Manifest.permission.CAMERA)
+                            != PackageManager.PERMISSION_GRANTED) {
+                        ActivityCompat.requestPermissions(instance,
+                                new String[]{Manifest.permission.CAMERA}, REQUEST_RECORD_CAMERA_PERMISSION); // 回调中再触发扫码页
+                    } else {
+                        Log.d("AppActivity", "scan qrcode");
+                        Intent intent = new Intent(instance, PaipaiCaptureActivity.class);
+                        startActivityForResult(intent, 1002);
+                    }
+                    
                 }
 
                 if(arg0.equals("DEVICE") && arg1.equals("info")){
@@ -520,6 +527,11 @@ public class AppActivity extends CocosActivity implements LifecycleOwner{
                 Log.e("AppActivity", "JSON error", e);
             }
             JsbBridge.sendToScript("CAMERAPermissionResult", result.toString());
+        }else if(requestCode == REQUEST_RECORD_CAMERA_PERMISSION){
+            Log.d("AppActivity", "scan qrcode");
+            Intent intent = new Intent(instance, PaipaiCaptureActivity.class);
+            startActivityForResult(intent, 1002);
+
         }
     }
 
