@@ -9,11 +9,11 @@ import com.cocos.lib.JsbBridge;
 
 public class PostVideoData {
     // 上传视频并获取评分，出错返回60
-    public static Result postVideoForScore(File videoFile, String activity_id, String token, int group_size) {
+    public static Result postVideoForScore(File videoFile, String task_id, String activity_id, String token, int group_size) {
         long startTime = System.currentTimeMillis();
         Log.d("PostVideoData", "开始上传视频评分 - " + startTime);
         Log.d("PostVideoData", "文件: " + videoFile.getName() + ", 大小: " + videoFile.length() + " bytes");
-        Log.d("PostVideoData", "参数 - activity_id: " + activity_id + ", token: " + token + ", group_size: " + group_size);
+        Log.d("PostVideoData", "参数 - task_id:" + task_id + ", activity_id: " + activity_id + ", token: " + token + ", group_size: " + group_size);
         
         String boundary = "----WebKitFormBoundary" + System.currentTimeMillis();
         String LINE_FEED = "\r\n";
@@ -43,13 +43,20 @@ public class PostVideoData {
             long afterOutputStreamTime = System.currentTimeMillis();
             Log.d("PostVideoData", "获取输出流耗时 - " + (afterOutputStreamTime - beforeOutputStreamTime) + "ms");
             
-            // 写入 activity_id 参数
+            // 写入 task_id 参数
             long beforeParamsTime = System.currentTimeMillis();
             String taskIdPart = "--" + boundary + LINE_FEED
+                    + "Content-Disposition: form-data; name=\"task_id\"" + LINE_FEED
+                    + LINE_FEED
+                    + task_id + LINE_FEED;
+            outputStream.writeBytes(taskIdPart);
+
+            //写入activity_id
+            String activityIDPart = "--" + boundary + LINE_FEED
                     + "Content-Disposition: form-data; name=\"activity_id\"" + LINE_FEED
                     + LINE_FEED
                     + activity_id + LINE_FEED;
-            outputStream.writeBytes(taskIdPart);
+            outputStream.writeBytes(activityIDPart);
             
             // 写入 token 参数
             String tokenPart = "--" + boundary + LINE_FEED
