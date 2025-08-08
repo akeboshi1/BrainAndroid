@@ -130,7 +130,7 @@ public class AppActivity extends CocosActivity implements LifecycleOwner{
         WXLaunchMiniProgram.Req req = new WXLaunchMiniProgram.Req();
         req.userName = "gh_965f61b76764"; // 这是小程序的原始 ID
         req.path = path;             // 小程序内页面路径
-        req.miniprogramType = WXLaunchMiniProgram.Req.MINIPROGRAM_TYPE_PREVIEW;
+        req.miniprogramType = WXLaunchMiniProgram.Req.MINIPTOGRAM_TYPE_RELEASE;
         api.sendReq(req);
 
     }
