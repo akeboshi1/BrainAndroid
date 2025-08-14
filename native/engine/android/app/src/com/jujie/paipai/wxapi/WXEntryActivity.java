@@ -65,7 +65,7 @@ public class WXEntryActivity extends Activity implements IWXAPIEventHandler {
 
             // 这里演示：弹个 Toast，然后路由到你的目标页面
             if (extMsg != null && !extMsg.isEmpty()) {
-                Toast.makeText(this, "From MiniProgram: " + extMsg, Toast.LENGTH_SHORT).show();
+                //Toast.makeText(this, "From MiniProgram: " + extMsg, Toast.LENGTH_SHORT).show();
             }
 
             // 跳转到你的落地页（例如支付结果页）
