@@ -31,9 +31,11 @@ import static com.jujie.audiosdk.Constant.REQUEST_RECORD_CAMERA_PERMISSION;
 
 import android.Manifest;
 import android.app.Activity;
+import android.content.BroadcastReceiver;
 import android.content.Intent;
 
 import android.content.Context;
+import android.content.IntentFilter;
 import android.content.pm.PackageInfo;
 import android.content.pm.Signature;
 import android.net.Uri;
@@ -53,6 +55,7 @@ import androidx.annotation.NonNull;
 import android.content.pm.PackageManager;
 import android.widget.Toast;
 
+import com.tencent.mm.opensdk.constants.ConstantsAPI;
 import com.tencent.mm.opensdk.modelbiz.WXLaunchMiniProgram;
 import com.tencent.mm.opensdk.openapi.IWXAPI;
 import com.tencent.mm.opensdk.openapi.WXAPIFactory;
@@ -130,7 +133,7 @@ public class AppActivity extends CocosActivity implements LifecycleOwner{
         WXLaunchMiniProgram.Req req = new WXLaunchMiniProgram.Req();
         req.userName = "gh_965f61b76764"; // 这是小程序的原始 ID
         req.path = path;             // 小程序内页面路径
-        req.miniprogramType = WXLaunchMiniProgram.Req.MINIPTOGRAM_TYPE_RELEASE;
+        req.miniprogramType = WXLaunchMiniProgram.Req.MINIPTOGRAM_TYPE_RELEASE; // 可选打开 开发版，体验版和正式版
         api.sendReq(req);
 
     }
@@ -152,8 +155,15 @@ public class AppActivity extends CocosActivity implements LifecycleOwner{
                 finish();
             }
         }
+
+        // Initialize the WXAPI instance
         api = WXAPIFactory.createWXAPI(this, "wx763bc34e94cf5aaf", false);
         api.registerApp("wx763bc34e94cf5aaf");
+        this.registerReceiver(new BroadcastReceiver() {
+            @Override public void onReceive(Context c, Intent i) {
+                api.registerApp("wx763bc34e94cf5aaf");
+            }
+        }, new IntentFilter(ConstantsAPI.ACTION_REFRESH_WXAPP));
 
         super.onCreate(savedInstanceState);
 
@@ -261,7 +271,7 @@ public class AppActivity extends CocosActivity implements LifecycleOwner{
                         Intent intent = new Intent(instance, PaipaiCaptureActivity.class);
                         startActivityForResult(intent, 1002);
                     }
-                    
+
                 }
 
                 if(arg0.equals("DEVICE") && arg1.equals("info")){
