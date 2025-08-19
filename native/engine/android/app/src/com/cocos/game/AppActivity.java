@@ -156,14 +156,21 @@ public class AppActivity extends CocosActivity implements LifecycleOwner{
             }
         }
 
-        // Initialize the WXAPI instance
         api = WXAPIFactory.createWXAPI(this, "wx763bc34e94cf5aaf", false);
-        api.registerApp("wx763bc34e94cf5aaf");
-        this.registerReceiver(new BroadcastReceiver() {
-            @Override public void onReceive(Context c, Intent i) {
-                api.registerApp("wx763bc34e94cf5aaf");
-            }
-        }, new IntentFilter(ConstantsAPI.ACTION_REFRESH_WXAPP));
+        // 修复Android 13+兼容性问题：添加RECEIVER_NOT_EXPORTED标志
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            this.registerReceiver(new BroadcastReceiver() {
+                @Override public void onReceive(Context c, Intent i) {
+                    api.registerApp("wx763bc34e94cf5aaf");
+                }
+            }, new IntentFilter(ConstantsAPI.ACTION_REFRESH_WXAPP), Context.RECEIVER_NOT_EXPORTED);
+        } else {
+            this.registerReceiver(new BroadcastReceiver() {
+                @Override public void onReceive(Context c, Intent i) {
+                    api.registerApp("wx763bc34e94cf5aaf");
+                }
+            }, new IntentFilter(ConstantsAPI.ACTION_REFRESH_WXAPP));
+        }
 
         super.onCreate(savedInstanceState);
 
