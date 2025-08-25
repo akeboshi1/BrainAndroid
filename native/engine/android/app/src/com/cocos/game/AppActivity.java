@@ -456,6 +456,32 @@ public class AppActivity extends CocosActivity implements LifecycleOwner{
                         JsbBridge.sendToScript("POSTVIDEODATAERROR", error.toString());
                     }
                 }
+
+                // 关闭应用接口
+                if (arg0.equals("APP") && arg1.equals("exit")) {
+                    Log.d("AppActivity", "APP exit requested");
+                    // 确保在主线程中执行UI操作
+                    instance.runOnUiThread(() -> {
+                        // 发送关闭确认消息给脚本
+                        JSONObject result = new JSONObject();
+                        try {
+                            result.put("code", 0);
+                            result.put("message", "app exit confirmed");
+                        } catch (JSONException e) {
+                            Log.e("AppActivity", "JSON error", e);
+                        }
+                        JsbBridge.sendToScript("APPExitResult", result.toString());
+                        
+                        // 延迟关闭应用，给脚本一些时间处理
+                        new android.os.Handler().postDelayed(() -> {
+                            // 关闭应用
+                            instance.finish();
+                            // 强制退出应用进程
+                            android.os.Process.killProcess(android.os.Process.myPid());
+                            System.exit(0);
+                        }, 100); // 延迟100毫秒
+                    });
+                }
             }
         });
     }
