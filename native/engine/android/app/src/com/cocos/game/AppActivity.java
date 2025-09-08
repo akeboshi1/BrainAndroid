@@ -432,6 +432,7 @@ public class AppActivity extends CocosActivity implements LifecycleOwner{
                         String activity_id = jsonObject.getString("activity_id");
                         String token = jsonObject.getString("token");
                         int group_size = jsonObject.getInt("group_size");
+                        boolean is_production = jsonObject.getBoolean("is_production");
 
                         Log.d("AppActivity", "absolutePath: " + absolutePath);
                         Log.d("AppActivity", "task_id: " + task_id);
@@ -441,7 +442,7 @@ public class AppActivity extends CocosActivity implements LifecycleOwner{
 
                         // 在后台线程中执行视频上传，避免阻塞主线程
                         new Thread(() -> {
-                            PostVideoData.postVideoForScore(new File(absolutePath), task_id, activity_id, token, group_size);
+                            PostVideoData.postVideoForScore(new File(absolutePath), task_id, activity_id, token, group_size, is_production);
                         }).start();
                     } catch (JSONException e) {
                         Log.e("AppActivity", "POSTVIDEO JSON parse error: " + e.getMessage());

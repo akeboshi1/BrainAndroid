@@ -9,7 +9,7 @@ import com.cocos.lib.JsbBridge;
 
 public class PostVideoData {
     // 上传视频并获取评分，出错返回60
-    public static Result postVideoForScore(File videoFile, String task_id, String activity_id, String token, int group_size) {
+    public static Result postVideoForScore(File videoFile, String task_id, String activity_id, String token, int group_size, boolean is_production) {
         long startTime = System.currentTimeMillis();
         Log.d("PostVideoData", "开始上传视频评分 - " + startTime);
         Log.d("PostVideoData", "文件: " + videoFile.getName() + ", 大小: " + videoFile.length() + " bytes");
@@ -24,7 +24,9 @@ public class PostVideoData {
         BufferedReader reader = null;
         try {
             long beforeUrlTime = System.currentTimeMillis();
-            URL url = new URL("https://test.paipai2.xinjiaxianglao.com/api/finger_exercise/upload_and_evaluate");
+            URL url_development = new URL("https://test.paipai2.xinjiaxianglao.com/api/finger_exercise/upload_and_evaluate");
+            URL url_production = new URL("https://colapai.xinjiaxianglao.com/api/finger_exercise/upload_and_evaluate");
+            URL url = is_production ? url_production : url_development;
             Log.d("PostVideoData", "连接URL: " + url.toString());
             
             long beforeConnectionTime = System.currentTimeMillis();
