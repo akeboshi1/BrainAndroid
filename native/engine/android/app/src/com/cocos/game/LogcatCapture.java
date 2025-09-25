@@ -4,8 +4,6 @@ import android.util.Log;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
-import com.jujie.audiosdk.Helper;
-import com.jujie.paipai.BuildConfig;
 import com.jujie.paipai.common.DeviceInfo;
 
 import java.io.BufferedReader;
