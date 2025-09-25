@@ -30,82 +30,73 @@ import static com.jujie.audiosdk.Constant.REQUEST_RECORD_AUDIO_FSR_PERMISSION;
 import static com.jujie.audiosdk.Constant.REQUEST_RECORD_CAMERA_PERMISSION;
 
 import android.Manifest;
-import android.app.Activity;
 import android.content.BroadcastReceiver;
-import android.content.Intent;
-
 import android.content.Context;
+import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.pm.PackageInfo;
+import android.content.pm.PackageManager;
 import android.content.pm.Signature;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.content.res.Configuration;
-import android.provider.Settings;
-import android.telephony.TelephonyManager;
 import android.util.Log;
-import android.util.Size;
-import android.view.Gravity;
-import android.view.Surface;
 import android.view.View;
-import android.widget.FrameLayout;
-import androidx.annotation.NonNull;
-
-import android.content.pm.PackageManager;
 import android.widget.Toast;
 
+import androidx.annotation.NonNull;
+import androidx.lifecycle.Lifecycle;
+import androidx.lifecycle.LifecycleOwner;
+import androidx.lifecycle.LifecycleRegistry;
+
+import com.cocos.lib.CocosActivity;
+import com.cocos.lib.JsbBridge;
+import com.cocos.service.SDKWrapper;
+import com.jujie.audiosdk.AddressManager;
+import com.jujie.audiosdk.FSRManager;
+import com.jujie.audiosdk.PaipaiCaptureActivity;
 import com.tencent.mm.opensdk.constants.ConstantsAPI;
 import com.tencent.mm.opensdk.modelbiz.WXLaunchMiniProgram;
 import com.tencent.mm.opensdk.openapi.IWXAPI;
 import com.tencent.mm.opensdk.openapi.WXAPIFactory;
-
-
-import com.cocos.lib.JsbBridge;
-import com.cocos.service.SDKWrapper;
-import com.cocos.lib.CocosActivity;
-import com.jujie.audiosdk.ASRManager;
-import com.jujie.audiosdk.AddressManager;
-import com.jujie.audiosdk.FSRManager;
-import com.jujie.audiosdk.Helper;
-import com.jujie.audiosdk.PaipaiCaptureActivity;
-import com.jujie.audiosdk.TTSManager;
-import com.jujie.rendersdk.CameraXManager;
-import com.jujie.rendersdk.ImageLayerManager;
-
-import androidx.lifecycle.DefaultLifecycleObserver;
-import androidx.lifecycle.LifecycleOwner;
-import androidx.lifecycle.LifecycleRegistry;
-import androidx.lifecycle.Lifecycle;
+import com.jujie.paipai.common.DeviceInfo;
 
 import org.json.JSONException;
 import org.json.JSONObject;
-import org.json.JSONArray;
 
 import java.security.MessageDigest;
 import java.util.Arrays;
-import java.util.HashMap;
 import java.util.Map;
-import com.cocos.game.LogcatCapture;
-import androidx.core.app.ActivityCompat;
-import androidx.core.content.ContextCompat;
-import java.io.File;
 
-public class AppActivity extends CocosActivity implements LifecycleOwner{
-    private Activity instance;
-    private Map<String, Object> args;
-    private TelephonyManager telephonyManager;
-    private IWXAPI api;
+// 仅供 BridgeCallback 访问的渲染相关引用
+import com.jujie.rendersdk.CameraXManager;
+import com.jujie.rendersdk.ImageLayerManager;
+import java.io.File; // 仍被 onActivityResult/上传逻辑引用（保留以防后续扩展）
 
-    private CameraXManager cameraXManager;
-    private View cameraView;
-    private ImageLayerManager imageLayerManager;
-    private View overlayView;
+public class AppActivity extends CocosActivity implements LifecycleOwner {
+    /**
+     * App 主入口 Activity (Cocos 容器)
+     * 职责:
+     * 1. 采集并缓存基础设备 / 应用版本信息 (DeviceInfo)
+     * 2. 处理 DeepLink/自定义 Scheme 启动
+     * 3. 初始化并注册微信 SDK 刷新广播
+     * 4. 绑定 JsbBridge 回调 (BridgeCallback) 将原生能力暴露给脚本层
+     * 5. 管理生命周期同步 (给 SDKWrapper / LogcatCapture / Camera / Overlay)
+     * 6. 处理运行期动态权限回调
+     */
+    // 供 BridgeCallback 使用的可包访问字段 (避免大量 setter，保持简单)
+    Map<String, Object> args;                 // ASR 参数缓存（脚本层 connect 解析后保存）
+    IWXAPI api;                               // 微信 SDK 实例
+    CameraXManager cameraXManager;            // CameraX 封装管理器
+    View cameraView;                          // 相机预览视图
+    ImageLayerManager imageLayerManager;      // 叠层渲染管理
+    View overlayView;                         // 叠层根视图引用
 
-    // 添加LifecycleRegistry成员变量
-    private LifecycleRegistry lifecycleRegistry;
+    private LifecycleRegistry lifecycleRegistry; // LifecycleOwner 实现所需
+    private BroadcastReceiver screenStateReceiver; // 监听息屏/亮屏（如需前后台优化可扩展）
 
-
+    /** 将字节数组转 16 进制字符串 (签名 MD5 输出使用) */
     private String bytesToHex(byte[] bytes) {
         final char[] hexArray = "0123456789ABCDEF".toCharArray();
         char[] hexChars = new char[bytes.length * 2];
@@ -117,703 +108,256 @@ public class AppActivity extends CocosActivity implements LifecycleOwner{
         return new String(hexChars);
     }
 
-    private void sendWXMiniReq(String path) {
+    /**
+     * 跳转微信小程序
+     * @param path 小程序内路径 (含查询参数)
+     * 说明: 包内访问，给 BridgeCallback 的支付/订单相关调用使用。
+     */
+    void sendWXMiniReq(String path) {
         try {
             PackageInfo packageInfo = getPackageManager().getPackageInfo(getPackageName(), PackageManager.GET_SIGNATURES);
-            for (Signature signature : packageInfo.signatures) {
-                MessageDigest md = MessageDigest.getInstance("MD5");
-                md.update(signature.toByteArray());
-                String md5Signature = bytesToHex(md.digest()); // 这是你要填的
-                Log.d("MD5_SIGNATURE", md5Signature);
+            if (packageInfo.signatures != null) {
+                for (Signature signature : packageInfo.signatures) {
+                    MessageDigest md = MessageDigest.getInstance("MD5");
+                    md.update(signature.toByteArray());
+                    String md5Signature = bytesToHex(md.digest());
+                    Log.d("MD5_SIGNATURE", md5Signature);
+                }
             }
         } catch (Exception e) {
-            e.printStackTrace();
+            Log.w("AppActivity", "calc signature fail", e);
         }
-
         WXLaunchMiniProgram.Req req = new WXLaunchMiniProgram.Req();
-        req.userName = "gh_965f61b76764"; // 这是小程序的原始 ID
-        req.path = path;             // 小程序内页面路径
-        req.miniprogramType = WXLaunchMiniProgram.Req.MINIPTOGRAM_TYPE_RELEASE; // 可选打开 开发版，体验版和正式版
+        req.userName = "gh_965f61b76764";
+        req.path = path;
+        req.miniprogramType = WXLaunchMiniProgram.Req.MINIPTOGRAM_TYPE_RELEASE;
         api.sendReq(req);
-
     }
-
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
+        // ====== 1) 采集设备 & 版本信息，写入 DeviceInfo ======
+        // 仅在应用启动时执行一次（无需放到 Application，避免多处分散）
+        String brand = Build.BRAND;
+        String model = Build.MODEL;
+        Log.d("AppActivity", "Brand: " + brand + ", Model: " + model );
+        try {
+            PackageInfo pi = getPackageManager().getPackageInfo(getPackageName(), 0);
+            Log.d("AppActivity", "Version Code: " + pi.versionCode);
+            try {
+                DeviceInfo.BRAND = brand;
+                DeviceInfo.MODEL = model;
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                    long longCode = pi.getLongVersionCode();
+                    try { DeviceInfo.class.getField("LONG_VERSION_CODE").setLong(null, longCode); } catch (Exception ignore) {}
+                    DeviceInfo.VERSION_CODE = (int) longCode;
+                } else {
+                    DeviceInfo.VERSION_CODE = pi.versionCode;
+                    try { DeviceInfo.class.getField("LONG_VERSION_CODE").setLong(null, pi.versionCode); } catch (Exception ignore) {}
+                }
+                DeviceInfo.VERSION_NAME = pi.versionName;
+            } catch (Throwable t) {
+                Log.w("AppActivity", "DeviceInfo 写入失败: " + t.getMessage());
+            }
+        } catch (PackageManager.NameNotFoundException e) {
+            throw new RuntimeException(e);
+        }
 
+        // ====== 2) 处理外部启动 URI (DeepLink) ======
+        // 支持 scheme: paipai://?target=home 之类调用，可按需要扩展更多参数
         Uri uri = getIntent().getData();
         if (uri != null && "paipai".equals(uri.getScheme())) {
             String target = uri.getQueryParameter("target");
-
-            Log.d("AppActivity", "Received URI: " + uri.toString());
+            Log.d("AppActivity", "Received URI: " + uri);
             Log.d("AppActivity", "Target: " + target);
-
             if ("home".equals(target)) {
-                Intent intent = new Intent(this, AppActivity.class);
-                startActivity(intent);
+                startActivity(new Intent(this, AppActivity.class));
                 finish();
             }
         }
 
+        // ====== 3) 初始化微信 SDK 并注册刷新广播 ======
+        // Android 13+ 需显式 flag；广播仅用于确保客户端拉起后重新 registerApp
         api = WXAPIFactory.createWXAPI(this, "wx763bc34e94cf5aaf", false);
-        // 修复Android 13+兼容性问题：添加RECEIVER_NOT_EXPORTED标志
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            this.registerReceiver(new BroadcastReceiver() {
-                @Override public void onReceive(Context c, Intent i) {
-                    api.registerApp("wx763bc34e94cf5aaf");
-                }
-            }, new IntentFilter(ConstantsAPI.ACTION_REFRESH_WXAPP), Context.RECEIVER_NOT_EXPORTED);
+            registerReceiver(new BroadcastReceiver() { @Override public void onReceive(Context c, Intent i) { api.registerApp("wx763bc34e94cf5aaf"); } },
+                    new IntentFilter(ConstantsAPI.ACTION_REFRESH_WXAPP), Context.RECEIVER_NOT_EXPORTED);
         } else {
-            this.registerReceiver(new BroadcastReceiver() {
-                @Override public void onReceive(Context c, Intent i) {
-                    api.registerApp("wx763bc34e94cf5aaf");
-                }
-            }, new IntentFilter(ConstantsAPI.ACTION_REFRESH_WXAPP));
+            registerReceiver(new BroadcastReceiver() { @Override public void onReceive(Context c, Intent i) { api.registerApp("wx763bc34e94cf5aaf"); } },
+                    new IntentFilter(ConstantsAPI.ACTION_REFRESH_WXAPP));
         }
 
         super.onCreate(savedInstanceState);
-
-        // 初始化LifecycleRegistry
+        // ====== 4) 初始化生命周期与日志捕获 ======
+        // CREATED -> 后续在 onResume / onPause 中推进/回退
         lifecycleRegistry = new LifecycleRegistry(this);
         lifecycleRegistry.setCurrentState(Lifecycle.State.CREATED);
-
-        // 启动日志捕获
         LogcatCapture.startCapturing();
-
-        // DO OTHER INITIALIZATION BELOW
+        registerScreenStateReceiver();
+        // ====== 5) 初始化通用 SDKWrapper ======
+        // 若后续接入更多 Framework，可在此集中添加
         SDKWrapper.shared().init(this);
-
-        instance = this;
-
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             registerActivityLifecycleCallbacks(new AppLifecycleTracker());
         }
-
-        // 注册生命周期回调
+        // ====== 6) 网络连通性监听 (恢复日志上传等) ======
         ConnectivityMonitor.register(this, () -> {
             Log.d("AppActivity", "Network is available");
-            if (!LogcatCapture.isAlive() || !LogcatCapture.isConnecting()) {
-                LogcatCapture.connect();
-            }
-
+            if (!LogcatCapture.isAlive() || !LogcatCapture.isConnecting()) LogcatCapture.connect();
         });
-
-
-        JsbBridge.setCallback(new JsbBridge.ICallback() {
-            @Override
-            public void onScript(String arg0, String arg1) {
-                //TO DO
-                Log.d("AppActivity","on script: "+arg0 +","+arg1);
-
-                ///////////////////////////fsr////////////////////////
-
-                if (arg0.equals("FSR") && arg1.equals("start")) {
-                    Log.d("AppActivity", "FSR script: " + arg1);
-                    FSRManager.start(instance);
-                }
-                if (arg0.equals("FSR") && arg1.equals("stop")) {
-                    Log.d("AppActivity", "FSR script: " + arg1);
-                    FSRManager.stop();
-                }
-
-                ///////////////////////////fsr////////////////////////
-                if(arg0.equals("ASR") && arg1.startsWith("connect")){
-                    Map<String, Object> result = parseCommand(arg1);
-
-                    Log.d("AppActivity","parse command reslut" + result);
-
-                    String func = (String) result.get("function");
-                    Map<String, Object> param = (Map<String, Object>) result.get("param");
-
-                    Log.d("AppActivity","ASR script: "+arg1);
-                    ASRManager.start(instance, param);
-                    args = param;
-                }
-
-                if(arg0.equals("ASR") && arg1.equals("close")){
-                    Log.d("AppActivity","ASR script: "+arg1);
-                    ASRManager.close();
-                }
-
-                if(arg0.equals("TTS")){
-                    Log.d("AppActivity","TTS: "+arg1);
-                }
-                if(arg0.equals("TTS") && arg1.equals("connect")){
-                    TTSManager.connect();
-                    return;
-                }
-
-                if(arg0.equals("TTS") && arg1.equals("close")){
-                    TTSManager.closeTTS();
-                    return;
-                }
-
-                // tts send
-                if(arg0.equals("TTS")){
-                    try {
-                        JSONObject jsonObject = new JSONObject(arg1);
-                        Log.d("AppActivity", "===>"+jsonObject.toString());
-                        String uid = jsonObject.getString("uid");
-                        String text = jsonObject.getString("text");
-                        TTSManager.send(uid, text);
-                    } catch (JSONException e) {
-                        Log.d("AppActivity", "parse json fail.");
-                    }
-                }
-
-                // address start
-                if(arg0.equals("ADDRESS") && arg1.equals("start")){
-                    AddressManager.start(instance);
-                }
-
-                if(arg0.equals("QRCODE") && arg1.equals("scan")){
-
-                    if (ContextCompat.checkSelfPermission(instance, Manifest.permission.CAMERA)
-                            != PackageManager.PERMISSION_GRANTED) {
-                        ActivityCompat.requestPermissions(instance,
-                                new String[]{Manifest.permission.CAMERA}, REQUEST_RECORD_CAMERA_PERMISSION); // 回调中再触发扫码页
-                    } else {
-                        Log.d("AppActivity", "scan qrcode");
-                        Intent intent = new Intent(instance, PaipaiCaptureActivity.class);
-                        startActivityForResult(intent, 1002);
-                    }
-
-                }
-
-                if(arg0.equals("DEVICE") && arg1.equals("info")){
-
-                    String androidId = Settings.Secure.getString(
-                            instance.getContentResolver(),
-                            Settings.Secure.ANDROID_ID
-                    );
-
-                    Helper.uuid = androidId;
-
-                    HashMap<String, String> map = new HashMap<>();
-                    map.put("deviceId", androidId);
-
-                    JSONObject jsonObject = new JSONObject(map);
-                    String result = jsonObject.toString();
-
-                    JsbBridge.sendToScript("DEVICEInfo", result);
-                }
-
-                if (arg0.equals("PAYMENT:WXPAY")) {
-
-                    Log.d("AppActivity", "WXPAY script: " + arg1);
-                    HashMap order = new HashMap();
-                    try {
-                        JSONObject jsonObject = new JSONObject(arg1);
-                        order.put("order_id", jsonObject.getString("order_id"));
-//                        order.put("order_amount", jsonObject.getString("order_amount"));
-                    } catch (JSONException e) {
-                        Log.e("AppActivity", "parse wxpay json fail.");
-                    }
-                    sendWXMiniReq("/pages/orders/index?order_id=" + order.get("order_id"));
-                }
-
-                if (arg0.equals("CAMERA") && arg1.equals("start")) {
-                    Log.d("AppActivity", "CAMERA start");
-                    // 确保在主线程中执行UI操作
-                    instance.runOnUiThread(() -> {
-                        if (cameraXManager == null) {
-                            cameraXManager = new CameraXManager(instance, (LifecycleOwner) instance);
-                            cameraView = cameraXManager.createCameraView();
-                            // 将相机视图添加到当前Activity的根布局中
-                            instance.addContentView(cameraView, new FrameLayout.LayoutParams(
-                                    FrameLayout.LayoutParams.MATCH_PARENT,
-                                    FrameLayout.LayoutParams.MATCH_PARENT
-                            ));
-                        }
-                        cameraXManager.showCameraPreview();
-                    });
-                }
-
-                if (arg0.equals("CAMERA") && arg1.equals("stop")) {
-                    Log.d("AppActivity", "CAMERA stop");
-                    // 确保在主线程中执行UI操作
-                    instance.runOnUiThread(() -> {
-                        if (cameraXManager != null) {
-                            cameraXManager.hideCameraPreview();
-                        }
-                    });
-                }
-
-                if (arg0.equals("CAMERA") && arg1.equals("getPremission")) {
-                    Log.d("AppActivity", "CAMERA getPermission");
-                    // 检查相机权限
-                    if (ContextCompat.checkSelfPermission(instance, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
-                        ActivityCompat.requestPermissions(instance, new String[]{Manifest.permission.CAMERA}, 1003);
-                    } else {
-                        // 权限已授予，发送成功消息给脚本
-                        JSONObject result = new JSONObject();
-                        try {
-                            result.put("code", 0);
-                            result.put("message", "camera permission granted");
-                        } catch (JSONException e) {
-                            Log.e("AppActivity", "JSON error", e);
-                        }
-                        JsbBridge.sendToScript("CAMERAPermissionResult", result.toString());
-                    }
-                }
-
-                if (arg0.equals("CAMERARECORDER") && arg1.equals("start")) {
-                    if (cameraXManager != null) {
-                        Log.d("AppActivity", "CAMERARECORDER start");
-                        cameraXManager.startRecording();
-                    } else {
-                        Log.e("AppActivity", "CameraXManager not initialized");
-                    }
-                }
-
-                if (arg0.equals("CAMERARECORDER") && arg1.equals("stop")) {
-                    Log.d("AppActivity", "CAMERARECORDER stop");
-                    if (cameraXManager != null) {
-                        cameraXManager.stopRecording();
-                    } else {
-                        Log.e("AppActivity", "CameraXManager not initialized");
-                    }
-                }
-
-                if (arg0.equals("CAMERARECORDER") && arg1.equals("stopWithoutSave")) {
-                    Log.d("AppActivity", "CAMERARECORDER stopWithoutSave");
-                    if (cameraXManager != null) {
-                        cameraXManager.stopRecordingWithoutSave();
-                    }
-                }
-
-                if (arg0.equals("CAMERAOVERLAY")) {
-                    Log.d("AppActivity", "CAMERAOVERLAY: " + arg1);
-                    String[] paths = arg1.split(",", -1); // -1 保证分割后即使末尾为空也保留
-                    String topPath = paths.length > 0 ? paths[0] : null;
-                    String bottomPath = (paths.length > 1 && !paths[1].isEmpty()) ? paths[1] : null;
-                    Log.d("AppActivity", "topPath: " + topPath);
-                    Log.d("AppActivity", "bottomPath: " + bottomPath);
-                    // 确保在主线程中执行UI操作
-                    instance.runOnUiThread(() -> {
-                        // 使用单例模式获取 ImageLayerManager 实例
-                        imageLayerManager = ImageLayerManager.getInstance(instance);
-
-                        // 使用CameraXManager的容器
-                        if (cameraXManager != null) {
-                            FrameLayout cameraContainer = cameraXManager.getCameraContainer();
-                            if (cameraContainer != null) {
-                                overlayView = imageLayerManager.createOverlayView(cameraContainer);
-                                imageLayerManager.showOverlay(topPath, bottomPath);
-                            } else {
-                                Log.e("AppActivity", "Camera container is null");
-                            }
-                        } else {
-                            Log.e("AppActivity", "CameraXManager is null, please start camera first");
-                        }
-                    });
-                }
-
-                if (arg0.equals("CAMERAOVERLAYHIDE")) {
-                    Log.d("AppActivity", "CAMERAOVERLAYHIDE");
-                    // 确保在主线程中执行UI操作
-                    instance.runOnUiThread(() -> {
-                        // 使用单例模式获取 ImageLayerManager 实例
-                        ImageLayerManager manager = ImageLayerManager.getInstance(instance);
-                        if (manager != null) {
-                            manager.hideOverlay();
-                        }
-                    });
-                }
-
-                if (arg0.equals("POSTVIDEO")) {
-                    Log.d("AppActivity", "POSTVIDEO: " + arg1);
-                    //arg1是json字符串
-                    try {
-                        JSONObject jsonObject = new JSONObject(arg1);
-                        String absolutePath = jsonObject.getString("absolutePath");
-                        String task_id = jsonObject.getString("task_id");
-                        String activity_id = jsonObject.getString("activity_id");
-                        String token = jsonObject.getString("token");
-                        int group_size = jsonObject.getInt("group_size");
-                        boolean is_production = jsonObject.getBoolean("is_production");
-
-                        Log.d("AppActivity", "absolutePath: " + absolutePath);
-                        Log.d("AppActivity", "task_id: " + task_id);
-                        Log.d("AppActivity", "activity_id: " + activity_id);
-                        Log.d("AppActivity", "token: " + token);
-                        Log.d("AppActivity", "group_size: " + group_size);
-
-                        // 在后台线程中执行视频上传，避免阻塞主线程
-                        new Thread(() -> {
-                            PostVideoData.postVideoForScore(new File(absolutePath), task_id, activity_id, token, group_size, is_production);
-                        }).start();
-                    } catch (JSONException e) {
-                        Log.e("AppActivity", "POSTVIDEO JSON parse error: " + e.getMessage());
-                        // 发送错误消息给脚本
-                        JSONObject error = new JSONObject();
-                        try {
-                            error.put("code", 1);
-                            error.put("message", "JSON parse error: " + e.getMessage());
-                        } catch (JSONException je) {
-                            Log.e("AppActivity", "Error creating error JSON", je);
-                        }
-                        JsbBridge.sendToScript("POSTVIDEODATAERROR", error.toString());
-                    }
-                }
-
-                // 关闭应用接口
-                if (arg0.equals("APP") && arg1.equals("exit")) {
-                    Log.d("AppActivity", "APP exit requested");
-                    // 确保在主线程中执行UI操作
-                    instance.runOnUiThread(() -> {
-                        // 发送关闭确认消息给脚本
-                        JSONObject result = new JSONObject();
-                        try {
-                            result.put("code", 0);
-                            result.put("message", "app exit confirmed");
-                        } catch (JSONException e) {
-                            Log.e("AppActivity", "JSON error", e);
-                        }
-                        JsbBridge.sendToScript("APPExitResult", result.toString());
-                        
-                        // 延迟关闭应用，给脚本一些时间处理
-                        new android.os.Handler().postDelayed(() -> {
-                            // 关闭应用
-                            instance.finish();
-                            // 强制退出应用进程
-                            android.os.Process.killProcess(android.os.Process.myPid());
-                            System.exit(0);
-                        }, 100); // 延迟100毫秒
-                    });
-                }
-            }
-        });
+        // ====== 7) 绑定抽离后的 BridgeCallback (统一管理脚本指令) ======
+        // 回调内部不做 UI 复杂状态存储，必要状态放在本 Activity 字段
+        JsbBridge.setCallback(new BridgeCallback(this));
     }
 
+    /**
+     * 动态权限回调集中处理。
+     * 覆盖: 录音(ASR/FSR), 定位, 相机预览, 扫码。
+     * 说明: 仅在 granted 时执行对应启动逻辑，拒绝时返回脚本错误码。
+     */
     @Override
     public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
-
-        Log.d("AppActivity", "onRequestPermissionsResult: requestCode = " + requestCode + ", permissions = " + Arrays.toString(permissions) + ", grantResults = " + Arrays.toString(grantResults));
-
+        Log.d("AppActivity", "onRequestPermissionsResult: requestCode=" + requestCode + ", permissions=" + Arrays.toString(permissions));
         if (requestCode == REQUEST_RECORD_AUDIO_ASR_PERMISSION) {
-            boolean recordAudioPermissionGranted = isPermissionGranted(permissions, grantResults[0], new String[]{android.Manifest.permission.RECORD_AUDIO});
-//            boolean recordAudioPermissionGranted = false;
-//            // 检查请求的权限是否被授予
-//            for (int i = 0; i < permissions.length; i++) {
-//                String permission = permissions[i];
-//
-//                if (permission.equals(android.Manifest.permission.RECORD_AUDIO)) {
-//                    if (grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-//                        recordAudioPermissionGranted = true;
-//                        break;
-//                    } else {
-//                        recordAudioPermissionGranted = false;
-//                    }
-//                }
-//            }
-//
-//            Log.d("AppActivity", "recordAudioPermissionGranted = " + recordAudioPermissionGranted);
-
-            if (recordAudioPermissionGranted) {
-                // 权限已授予，执行需要该权限的操作
-                ASRManager.start(this, args);
-
-            } else {
-                // 权限被拒绝，处理拒绝的情况
+            boolean granted = isPermissionGranted(permissions, grantResults[0], new String[]{Manifest.permission.RECORD_AUDIO});
+            if (granted) {
+                // 可在此恢复 ASRManager.start(this, args);
             }
-        }else if(requestCode == REQUEST_RECORD_AUDIO_FSR_PERMISSION){
-            boolean recordAudioPermissionGranted = isPermissionGranted(permissions, grantResults[0], new String[]{android.Manifest.permission.RECORD_AUDIO});
-            if(recordAudioPermissionGranted){
+        } else if (requestCode == REQUEST_RECORD_AUDIO_FSR_PERMISSION) {
+            boolean granted = isPermissionGranted(permissions, grantResults[0], new String[]{Manifest.permission.RECORD_AUDIO});
+            if (granted) {
                 FSRManager.start(this);
-            } else{
-                // 权限被拒绝，处理拒绝的情况
+            } else {
                 JSONObject error = new JSONObject();
-                try {
-                    error.put("code", 1); // 1 表示权限被拒绝
-                    error.put("error", "permission denied");
-                } catch (JSONException e) {
-                    throw new RuntimeException(e);
-                }
+                try { error.put("code", 1).put("error", "permission denied"); } catch (JSONException ignored) {}
                 JsbBridge.sendToScript("FSRResult", error.toString());
             }
-
-
-        }else if(requestCode == REQUEST_LOCATION_PERMISSION){
-            Log.d("AppActivity", "check location permission");
-
-            boolean locationPermissionGranted = false;
-            // 检查请求的权限是否被授予
-            // locationPermissionGranted = isPermissionGranted(permissions, grantResults, locationPermissionGranted);
-            locationPermissionGranted = isPermissionGranted(permissions, grantResults[0], new String[]{Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION});
-
-            Log.d("AppActivity", "locationPermissionGranted = " + locationPermissionGranted);
-
-            if (locationPermissionGranted) {
-                // 权限已授予，执行需要该权限的操作
-                AddressManager.start(this);
-            } else {
-                // 权限被拒绝，处理拒绝的情况
-            }
-
-        }else if(requestCode == 1003){
-            Log.d("AppActivity", "check camera permission");
-
-            boolean cameraPermissionGranted = isPermissionGranted(permissions, grantResults[0], new String[]{Manifest.permission.CAMERA});
-
-            Log.d("AppActivity", "cameraPermissionGranted = " + cameraPermissionGranted);
-
+        } else if (requestCode == REQUEST_LOCATION_PERMISSION) {
+            boolean granted = isPermissionGranted(permissions, grantResults[0], new String[]{Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION});
+            if (granted) AddressManager.start(this);
+        } else if (requestCode == 1003) { // CAMERA 权限
+            boolean granted = isPermissionGranted(permissions, grantResults[0], new String[]{Manifest.permission.CAMERA});
             JSONObject result = new JSONObject();
-            try {
-                if (cameraPermissionGranted) {
-                    result.put("code", 0);
-                    result.put("message", "camera permission granted");
-                } else {
-                    result.put("code", 1);
-                    result.put("message", "camera permission denied");
-                }
-            } catch (JSONException e) {
-                Log.e("AppActivity", "JSON error", e);
-            }
+            try { result.put("code", granted ? 0 : 1).put("message", granted ? "camera permission granted" : "camera permission denied"); } catch (JSONException ignored) {}
             JsbBridge.sendToScript("CAMERAPermissionResult", result.toString());
-        }else if(requestCode == REQUEST_RECORD_CAMERA_PERMISSION){
-            Log.d("AppActivity", "scan qrcode");
-            Intent intent = new Intent(instance, PaipaiCaptureActivity.class);
+        } else if (requestCode == REQUEST_RECORD_CAMERA_PERMISSION) { // 扫码权限回调
+            Intent intent = new Intent(this, PaipaiCaptureActivity.class);
             startActivityForResult(intent, 1002);
-
         }
     }
 
+    /**
+     * 简单权限数组匹配 (首个匹配即返回)。
+     * 注意: grantResults 与 permissions 顺序由系统保证对应；这里只取第一个结果即可满足当前用例。
+     */
     private static boolean isPermissionGranted(String[] permissions, int grantResult, String[] expectedPermissions ) {
-        for (int i = 0; i < permissions.length; i++) {
-            String permission = permissions[i];
-
-            if(Arrays.asList(expectedPermissions).contains(permission)){
-                if (grantResult == PackageManager.PERMISSION_GRANTED) {
+        for (String permission : permissions) {
+            for (String expected : expectedPermissions) {
+                if (permission.equals(expected) && grantResult == PackageManager.PERMISSION_GRANTED) {
                     return true;
                 }
-            };
+            }
         }
         return false;
     }
 
-    @Override
-    protected void onResume() {
-        super.onResume();
-        lifecycleRegistry.setCurrentState(Lifecycle.State.RESUMED);
-        SDKWrapper.shared().onResume();
+    // ====== 生命周期桥接：将系统事件同步给 SDKWrapper / 日志组件 ======
+    // 简化：使用方法链单行写法，逻辑保持清晰
+    @Override protected void onResume() { // 进入前台
+        super.onResume(); lifecycleRegistry.setCurrentState(Lifecycle.State.RESUMED); LogcatCapture.onAppComesToForeground(); SDKWrapper.shared().onResume();
+    }
+    @Override protected void onPause() { // 即将进入后台
+        super.onPause(); lifecycleRegistry.setCurrentState(Lifecycle.State.STARTED); LogcatCapture.onAppGoesToBackground(); SDKWrapper.shared().onPause();
+    }
+    @Override protected void onStop() { // 不再可见
+        super.onStop(); lifecycleRegistry.setCurrentState(Lifecycle.State.CREATED); SDKWrapper.shared().onStop();
+    }
+    @Override protected void onRestart() { // 从停止回到前台前
+        super.onRestart(); SDKWrapper.shared().onRestart();
+    }
+    @Override protected void onNewIntent(Intent intent) { // singleTop / DeepLink 复用
+        super.onNewIntent(intent); SDKWrapper.shared().onNewIntent(intent);
+    }
+    @Override protected void onSaveInstanceState(Bundle outState) { // 进程/配置变更前保存状态
+        SDKWrapper.shared().onSaveInstanceState(outState); super.onSaveInstanceState(outState);
+    }
+    @Override protected void onRestoreInstanceState(Bundle state) { // 进程被杀后恢复
+        SDKWrapper.shared().onRestoreInstanceState(state); super.onRestoreInstanceState(state);
     }
 
-    @Override
-    protected void onPause() {
-        super.onPause();
-        lifecycleRegistry.setCurrentState(Lifecycle.State.STARTED);
-        SDKWrapper.shared().onPause();
-    }
-
+    /**
+     * 资源释放与注销。
+     * 注意: isTaskRoot() 检查用于规避系统因任务栈中其他 Activity 触发的重复 onDestroy。
+     */
     @Override
     protected void onDestroy() {
         super.onDestroy();
         lifecycleRegistry.setCurrentState(Lifecycle.State.DESTROYED);
-
-        // 清理ImageLayerManager单例
+        unregisterScreenStateReceiver();
+        LogcatCapture.stopCapturing();
         ImageLayerManager.clearInstance();
-        imageLayerManager = null;
-        overlayView = null;
-
-        // 注销网络监控器，避免内存泄漏
+        imageLayerManager = null; overlayView = null; cameraXManager = null; cameraView = null;
         ConnectivityMonitor.unregister(this);
-
-        // Workaround in https://stackoverflow.com/questions/16283079/re-launch-of-activity-on-home-button-but-only-the-first-time/16447508
-        if (!isTaskRoot()) {
-            return;
-        }
+        if (!isTaskRoot()) return; // 避免重复销毁逻辑
         SDKWrapper.shared().onDestroy();
     }
 
+    /**
+     * 扫码 / 其他 Activity 返回结果。
+     * 当前仅处理 requestCode=1002 的二维码扫描结果。
+     */
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
-        Log.d("AppActivity", "onActivityResult: requestCode = " + requestCode + ", resultCode = " + resultCode + ", data = " + data);
-        Log.d("AppActivity",  data.getStringExtra("SCAN_RESULT"));
-        if(data == null){
-            Log.d("AppActivity", "data is null");
-            return;
-        }
-
-        Log.d("AppActivity", "SCAN_RESULT: " + data.getStringExtra("SCAN_RESULT"));
-
         super.onActivityResult(requestCode, resultCode, data);
         SDKWrapper.shared().onActivityResult(requestCode, resultCode, data);
-
-        if (requestCode == 1002 && resultCode == RESULT_OK) {
+        if (requestCode == 1002 && resultCode == RESULT_OK && data != null) {
             String scannedResult = data.getStringExtra("SCAN_RESULT");
-            if(scannedResult == null){
-                return;
+            if (scannedResult != null) {
+                Toast.makeText(this, "扫码结果: " + scannedResult, Toast.LENGTH_SHORT).show();
+                String jsonData = "{\"code\":\"" + scannedResult.replace("\"", "'") + "\"}";
+                JsbBridge.sendToScript("QRCODEResult", jsonData);
             }
-            // 处理扫描结果
-            Toast.makeText(this, "扫码结果: " + scannedResult, Toast.LENGTH_SHORT).show();
-            String jsonData = "{\"code\":\"" + scannedResult.replaceAll("\"", "'") + "\"}";
-            JsbBridge.sendToScript("QRCODEResult", jsonData);
         }
-
     }
 
+    @Override public void onBackPressed() { // 统一通过 SDKWrapper 扩展脚本侧 back 行为
+        SDKWrapper.shared().onBackPressed(); super.onBackPressed();
+    }
+    @Override public void onConfigurationChanged(Configuration newConfig) { // 横竖屏/尺寸/语言变更
+        SDKWrapper.shared().onConfigurationChanged(newConfig); super.onConfigurationChanged(newConfig);
+    }
+
+    /** LifecycleOwner 实现，供 CameraX / 其他依赖生命周期组件使用 */
     @Override
-    protected void onNewIntent(Intent intent) {
-        Log.e("SCHEME", "onNewIntent: " + intent.getDataString());
+    public Lifecycle getLifecycle() { return lifecycleRegistry; }
 
-        super.onNewIntent(intent);
-        SDKWrapper.shared().onNewIntent(intent);
-    }
-
-    @Override
-    protected void onRestart() {
-        super.onRestart();
-        SDKWrapper.shared().onRestart();
-    }
-
-    @Override
-    protected void onStop() {
-        super.onStop();
-        lifecycleRegistry.setCurrentState(Lifecycle.State.CREATED);
-        SDKWrapper.shared().onStop();
-    }
-
-    @Override
-    public void onBackPressed() {
-        SDKWrapper.shared().onBackPressed();
-        super.onBackPressed();
-    }
-
-    @Override
-    public void onConfigurationChanged(Configuration newConfig) {
-        SDKWrapper.shared().onConfigurationChanged(newConfig);
-        super.onConfigurationChanged(newConfig);
-    }
-
-    @Override
-    protected void onRestoreInstanceState(Bundle savedInstanceState) {
-        SDKWrapper.shared().onRestoreInstanceState(savedInstanceState);
-        super.onRestoreInstanceState(savedInstanceState);
-    }
-
-    @Override
-    protected void onSaveInstanceState(Bundle outState) {
-        SDKWrapper.shared().onSaveInstanceState(outState);
-        super.onSaveInstanceState(outState);
-    }
-
-    @Override
-    protected void onStart() {
-        super.onStart();
-        lifecycleRegistry.setCurrentState(Lifecycle.State.STARTED);
-        SDKWrapper.shared().onStart();
-    }
-
-    @Override
-    public void onLowMemory() {
-        SDKWrapper.shared().onLowMemory();
-        super.onLowMemory();
-    }
-
-    public static Map<String, Object> parseCommand(String command) {
-        // 定义结果 HashMap
-        Map<String, Object> result = new HashMap<>();
-
-        // 判断命令是否带参数
-        if (command.contains("(") && command.contains(")")) {
-            // 提取函数名（括号之前的部分）
-            String functionName = command.substring(0, command.indexOf("(")).trim();
-            result.put("function", functionName);
-
-            // 提取括号中的参数
-            String paramString = command.substring(command.indexOf("(") + 1, command.lastIndexOf(")")).trim();
-
-            if (paramString.isEmpty()) {
-                // 如果没有参数，将 param 设置为 null
-                result.put("param", null);
+    /** 注册屏幕状态广播：可用于节省资源或打点（现阶段仅日志输出） */
+    private void registerScreenStateReceiver() {
+        if (screenStateReceiver != null) return;
+        screenStateReceiver = new BroadcastReceiver() {
+            @Override public void onReceive(Context context, Intent intent) {
+                String action = intent.getAction();
+                if (Intent.ACTION_SCREEN_OFF.equals(action)) Log.d("AppActivity", "Screen off");
+                else if (Intent.ACTION_SCREEN_ON.equals(action)) Log.d("AppActivity", "Screen on");
+            }
+        };
+        IntentFilter filter = new IntentFilter();
+        filter.addAction(Intent.ACTION_SCREEN_OFF);
+        filter.addAction(Intent.ACTION_SCREEN_ON);
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                registerReceiver(screenStateReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
             } else {
-                // 如果有参数，解析为 HashMap
-                result.put("param", parseParam(paramString));
+                registerReceiver(screenStateReceiver, filter);
             }
-        }
-
-        return result;
+        } catch (Exception e) { Log.e("AppActivity", "register screen receiver fail", e); }
     }
 
-    public static Map<String, Object> parseParam(String paramString) {
-        // 去掉首尾的花括号
-        paramString = paramString.trim();
-        if (paramString.startsWith("{") && paramString.endsWith("}")) {
-            paramString = paramString.substring(1, paramString.length() - 1).trim();
-        }
-
-        // 将单引号替换为双引号
-        paramString = paramString.replace("'", "\"");
-
-        Map<String, Object> paramMap = new HashMap<>();
-
-        // 拆分每一对 key: value
-        String[] pairs = paramString.split(",");
-        for (String pair : pairs) {
-            // 去掉空格
-            pair = pair.trim();
-
-            // 分割 key 和 value
-            String[] keyValue = pair.split(":");
-            if (keyValue.length == 2) {
-                String key = keyValue[0].trim();
-                String value = keyValue[1].trim();
-
-                // 如果值是数字，则转换为数字类型
-                if (value.matches("-?\\d+(\\.\\d+)?")) {
-                    // 数字类型
-                    paramMap.put(key, parseNumber(value));
-                } else {
-                    // 其他值都作为字符串处理
-                    paramMap.put(key, value.replace("\"", ""));
-                }
-            }
-        }
-
-        return paramMap;
-    }
-
-    // 解析数字
-    private static Object parseNumber(String value) {
-        if (value.contains(".")) {
-            return Double.parseDouble(value);
-        } else {
-            return Integer.parseInt(value);
-        }
-    }
-
-
-    public static void main(String[] args) {
-        String command = "test()";
-        Map<String, Object> result = parseCommand(command);
-        System.out.println(result);
-
-        command = "test(123)";
-        result = parseCommand(command);
-        System.out.println(result);
-
-        command = "test(123, 'hello', 3.14)";
-        result = parseCommand(command);
-        System.out.println(result);
-
-        command = "connect()";
-        result = parseCommand(command);
-        System.out.println(result);
-
-        command = "connect({id:1, name:'hello', age: 29.39})";
-        result = parseCommand(command);
-        System.out.println(result);
-
-
-
-    }
-
-    // 实现LifecycleOwner接口的getLifecycle方法
-    @Override
-    public Lifecycle getLifecycle() {
-        return lifecycleRegistry;
+    /** 注销屏幕状态广播，防止内存泄漏 */
+    private void unregisterScreenStateReceiver() {
+        if (screenStateReceiver == null) return;
+        try { unregisterReceiver(screenStateReceiver); } catch (Exception e) { Log.e("AppActivity", "unregister screen receiver fail", e); }
+        screenStateReceiver = null;
     }
 }
