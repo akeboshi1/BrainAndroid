@@ -271,14 +271,21 @@ public class BridgeCallback implements JsbBridge.ICallback {
 
         if (arg0.equals("LOGIN")) {
 
-            String env = BuildConfig.BUILD_TYPE ;
-            Log.d("BridgeCallback", "BuildConfig.BUILD_TYPE: " + BuildConfig.BUILD_TYPE);
+            Log.d("BridgeCallback", "LOGIN: " + arg1);
 
             try {
                 JSONObject userInfo = new JSONObject(arg1);
-                String mpNo = userInfo.getString("mp_no");
-                String orgCode = userInfo.getString("org_code");
-                String userName = userInfo.getString("username");
+                String mpNo = "" ;
+                if(userInfo.has("mp_no"))
+                    mpNo = userInfo.getString("mp_no");
+
+                String orgCode = "";
+                if(userInfo.has("org_code"))
+                    orgCode = userInfo.getString("org_code");
+
+                String userName = "";
+                if(userInfo.has("username"))
+                    userName =userInfo.getString("username");
 
                 Log.d("BridgeCallback", "Updating user info: mpNo=" + mpNo + ", orgCode=" + orgCode + ", userName=" + userName);
                 DeviceInfo.updateAccount(mpNo, orgCode, userName);
