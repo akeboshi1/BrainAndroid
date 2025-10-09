@@ -109,6 +109,34 @@ public class AppActivity extends CocosActivity implements LifecycleOwner {
     }
 
     /**
+     * 获取当前APK版本信息
+     * @return 包含版本号、版本名称等信息的JSON字符串
+     * 说明: 包内访问，给 BridgeCallback 的版本查询调用使用。
+     */
+    String getVersionInfo() {
+        try {
+            Log.e("AppActivity", "getVersionInfo");
+            PackageInfo packageInfo = getPackageManager().getPackageInfo(getPackageName(), 0);
+            JSONObject versionInfo = new JSONObject();
+            versionInfo.put("versionName", packageInfo.versionName);
+            versionInfo.put("versionCode", packageInfo.versionCode);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                versionInfo.put("longVersionCode", packageInfo.getLongVersionCode());
+            }
+            return versionInfo.toString();
+        } catch (Exception e) {
+            Log.e("AppActivity", "获取版本信息失败", e);
+            JSONObject errorInfo = new JSONObject();
+            try {
+                errorInfo.put("error", "获取版本信息失败: " + e.getMessage());
+            } catch (JSONException je) {
+                Log.e("AppActivity", "创建错误信息JSON失败", je);
+            }
+            return errorInfo.toString();
+        }
+    }
+
+    /**
      * 跳转微信小程序
      * @param path 小程序内路径 (含查询参数)
      * 说明: 包内访问，给 BridgeCallback 的支付/订单相关调用使用。

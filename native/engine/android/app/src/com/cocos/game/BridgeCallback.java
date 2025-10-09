@@ -122,6 +122,14 @@ public class BridgeCallback implements JsbBridge.ICallback {
             return;
         }
 
+        // 获取APK版本信息
+        if(arg0.equals("VERSION") && arg1.equals("info")){
+            String versionInfo = activity.getVersionInfo();
+            JsbBridge.sendToScript("VERSIONInfo", versionInfo);
+            Log.d("BridgeCallback", "VERSIONInfo: " + versionInfo);
+            return;
+        }
+
         // 微信支付（跳转小程序）
         if (arg0.equals("PAYMENT:WXPAY")) {
             try {
