@@ -24,6 +24,7 @@
  ****************************************************************************/
 package com.cocos.game;
 
+import static com.jujie.audiosdk.Constant.REQUEST_CHAT_AUDIO_PERMISSION;
 import static com.jujie.audiosdk.Constant.REQUEST_LOCATION_PERMISSION;
 import static com.jujie.audiosdk.Constant.REQUEST_RECORD_AUDIO_ASR_PERMISSION;
 import static com.jujie.audiosdk.Constant.REQUEST_RECORD_AUDIO_FSR_PERMISSION;
@@ -272,6 +273,11 @@ public class AppActivity extends CocosActivity implements LifecycleOwner {
         } else if (requestCode == REQUEST_RECORD_CAMERA_PERMISSION) { // 扫码权限回调
             Intent intent = new Intent(this, PaipaiCaptureActivity.class);
             startActivityForResult(intent, 1002);
+        } else if (requestCode == REQUEST_CHAT_AUDIO_PERMISSION) {
+            boolean granted = isPermissionGranted(permissions, grantResults[0], new String[]{Manifest.permission.RECORD_AUDIO});
+            Log.d("AppActivity", "REQUEST_CHAT_AUDIO_PERMISSION granted=" + granted);
+             // 无论授予与否均通知脚本侧，避免脚本侧等待
+            JsbBridge.sendToScript("CHAT:RECORD_AUDIO:PERMISSION", granted ? "1" : "0");
         }
     }
 

@@ -1,0 +1,179 @@
+package com.jujie.paipai.chat;
+
+import android.content.Context;
+import android.os.Handler;
+import android.os.HandlerThread;
+import android.os.Looper;
+import android.util.Base64;
+import android.util.Log;
+
+import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
+import androidx.media3.common.AudioAttributes;
+import androidx.media3.common.C;
+import androidx.media3.common.MediaItem;
+import androidx.media3.common.PlaybackException;
+import androidx.media3.common.Player;
+import androidx.media3.common.util.UnstableApi;
+import androidx.media3.exoplayer.ExoPlayer;
+
+import java.util.ArrayDeque;
+import java.util.Deque;
+
+/**
+ * 负责串行播放 TTS 段并在正确的线程上访问 ExoPlayer。
+ * - 单独的 HandlerThread + Looper；所有 player 调用封送到该线程。
+ * - data URI 方式播放 base64 编码的音频（默认当作 audio/mpeg）。
+ * - 通过 Callback 通知段开始/结束（包含是否取消）。
+ */
+public class ChatTtsPlayer {
+
+    public interface Callback {
+        void onSegmentStart(@NonNull String requestId, int sequence, @NonNull String textDelta);
+        void onSegmentEnd(@NonNull String requestId, int sequence, boolean isFinalSegment, boolean canceled);
+    }
+
+    private static final class Track {
+        final String requestId;
+        final int sequence;
+        final String base64;
+        final String textDelta;
+        final boolean isFinalSegment;
+        boolean startNotified = false;
+        Track(String r, int s, String b64, String t, boolean fin){
+            requestId = r; sequence = s; base64 = b64; textDelta = t; isFinalSegment = fin;
+        }
+    }
+
+    private final HandlerThread playerThread;
+    private final Handler playerHandler;
+    private final Looper playerLooper;
+    private final ExoPlayer player;
+    private final Deque<Track> queue = new ArrayDeque<>();
+    private @Nullable String currentPlayingMeta = null; // requestId#sequence
+    private final Callback callback;
+
+    @UnstableApi
+    public ChatTtsPlayer(@NonNull Context app, @NonNull Callback cb) {
+        this.callback = cb;
+        this.playerThread = new HandlerThread("tts-player-thread");
+        this.playerThread.start();
+        this.playerLooper = playerThread.getLooper();
+        this.playerHandler = new Handler(playerLooper);
+
+        this.player = new ExoPlayer.Builder(app)
+                .setLooper(playerLooper)
+                .build();
+        this.player.addListener(new Player.Listener() {
+            @Override
+            public void onPlaybackStateChanged(int state) {
+                if (state == Player.STATE_READY && player.getPlayWhenReady()) {
+                    notifyStartIfNeeded();
+                }
+                if (state == Player.STATE_ENDED) {
+                    handleEnded(false);
+                }
+            }
+            @Override
+            public void onIsPlayingChanged(boolean isPlaying) {
+                if (isPlaying) notifyStartIfNeeded();
+            }
+            @Override
+            public void onPlayerError(@NonNull PlaybackException error) {
+                handleEnded(true);
+            }
+        });
+        runOnPlayer(() -> {
+            AudioAttributes attrs = new AudioAttributes.Builder()
+                    .setUsage(C.USAGE_VOICE_COMMUNICATION)
+                    .setContentType(C.AUDIO_CONTENT_TYPE_SPEECH)
+                    .build();
+            player.setAudioAttributes(attrs, /* handleAudioFocus= */ false);
+        });
+    }
+
+    public void enqueue(@NonNull String requestId, int sequence, @NonNull byte[] audio,
+                        @NonNull String textDelta, boolean isFinalSegment) {
+        Log.d("TtsPlayer", "enqueue: " + requestId + "#" + sequence +
+                " len=" + audio.length + " final=" + isFinalSegment + " playing=" + currentPlayingMeta);
+
+        final String b64 = Base64.encodeToString(audio, Base64.NO_WRAP);
+        runOnPlayer(() -> {
+            queue.addLast(new Track(requestId, sequence, b64, textDelta, isFinalSegment));
+            playNextIfIdle();
+        });
+    }
+
+    public void cancelForResponse(@NonNull String responseId){
+        runOnPlayer(() -> {
+            // 移除队列中所有匹配的条目
+            Deque<Track> remain = new ArrayDeque<>();
+            for (Track t : queue) if (!t.requestId.equals(responseId)) remain.addLast(t);
+            // 若当前播放属于该 responseId，则立即停止并作为取消结束
+            boolean canceledCurrent = false;
+            Track current = queue.peekFirst();
+            if (current != null && current.requestId.equals(responseId)) {
+                try { player.stop(); } catch (Exception ignored) {}
+                canceledCurrent = true;
+            }
+            queue.clear(); queue.addAll(remain);
+            if (canceledCurrent && current != null) {
+                // 主动出队并回调取消
+                queue.pollFirst();
+                currentPlayingMeta = null;
+                try { callback.onSegmentEnd(current.requestId, current.sequence, current.isFinalSegment, true); } catch (Exception ignored) {}
+            }
+            playNextIfIdle();
+        });
+    }
+
+    public void clear(){
+        runOnPlayer(() -> {
+            queue.clear();
+            try { player.stop(); } catch (Exception ignored) {}
+            currentPlayingMeta = null;
+        });
+    }
+
+    public void release(){
+        runOnPlayer(() -> {
+            try { player.release(); } catch (Exception ignored) {}
+            try { playerThread.quitSafely(); } catch (Exception ignored) {}
+        });
+    }
+
+    private void notifyStartIfNeeded(){
+        if (Looper.myLooper() != playerLooper) { runOnPlayer(this::notifyStartIfNeeded); return; }
+        Track cur = queue.peekFirst();
+        if (cur == null || cur.startNotified) return;
+        cur.startNotified = true;
+        try { callback.onSegmentStart(cur.requestId, cur.sequence, cur.textDelta); } catch (Exception ignored) {}
+    }
+
+    private void handleEnded(boolean canceled){
+        if (Looper.myLooper() != playerLooper) { runOnPlayer(() -> handleEnded(canceled)); return; }
+        Track finished = queue.pollFirst();
+        currentPlayingMeta = null;
+        if (finished != null) {
+            try { callback.onSegmentEnd(finished.requestId, finished.sequence, finished.isFinalSegment, canceled); } catch (Exception ignored) {}
+        }
+        playNextIfIdle();
+    }
+
+    private void playNextIfIdle(){
+        if (Looper.myLooper() != playerLooper) { runOnPlayer(this::playNextIfIdle); return; }
+        if (player.isPlaying()) return;
+        Track next = queue.peekFirst();
+        if (next == null) { currentPlayingMeta = null; return; }
+        String uri = "data:audio/mpeg;base64," + next.base64;
+        currentPlayingMeta = next.requestId + "#" + next.sequence;
+        player.setMediaItem(MediaItem.fromUri(uri));
+        player.prepare();
+        player.play();
+    }
+
+    private void runOnPlayer(@NonNull Runnable r){
+        if (Looper.myLooper() == playerLooper) r.run(); else playerHandler.post(r);
+    }
+}
+

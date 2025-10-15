@@ -1,5 +1,7 @@
 package com.cocos.game;
 
+import static androidx.core.app.ActivityCompat.requestPermissions;
+import static com.jujie.audiosdk.Constant.REQUEST_CHAT_AUDIO_PERMISSION;
 import static com.jujie.audiosdk.Constant.REQUEST_RECORD_CAMERA_PERMISSION;
 
 import android.Manifest;
@@ -12,14 +14,14 @@ import android.widget.FrameLayout;
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
 
-import com.cocos.lib.BuildConfig;
 import com.cocos.lib.JsbBridge;
 import com.jujie.audiosdk.ASRManager;
 import com.jujie.audiosdk.AddressManager;
 import com.jujie.audiosdk.FSRManager;
 import com.jujie.audiosdk.Helper;
 import com.jujie.audiosdk.PaipaiCaptureActivity;
-import com.jujie.audiosdk.TTSManager;
+import com.jujie.paipai.chat.CocosChatListener;
+import com.jujie.paipai.chat.VoiceChatClient;
 import com.jujie.paipai.common.DeviceInfo;
 
 import org.json.JSONException;
@@ -35,6 +37,7 @@ import java.util.Map;
 public class BridgeCallback implements JsbBridge.ICallback {
 
     private final AppActivity activity;
+    private VoiceChatClient chatClient;
 
     public BridgeCallback(AppActivity activity) {
         this.activity = activity;
@@ -49,45 +52,68 @@ public class BridgeCallback implements JsbBridge.ICallback {
             FSRManager.start(activity);
             return;
         }
+
         if (arg0.equals("FSR") && arg1.equals("stop")) {
             FSRManager.stop();
             return;
         }
 
-        // ASR 连接/关闭
-        if (arg0.equals("ASR") && arg1.startsWith("connect")) {
-            Map<String, Object> result = parseCommand(arg1);
-            Log.d("BridgeCallback","ASR parse result: " + result);
-            Map<String, Object> param = (Map<String, Object>) result.get("param");
-            // ASRManager.start(activity, param);
-            activity.args = param; // 保留参数到 activity
-            return;
-        }
-        if (arg0.equals("ASR") && arg1.equals("close")) {
-            ASRManager.close();
+        if (arg0.equals("CHAT:START")) {
+            Log.d("BridgeCallback","chat start params: "+arg1);
+
+            if (ContextCompat.checkSelfPermission(this.activity, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+                requestPermissions(this.activity, new String[]{Manifest.permission.RECORD_AUDIO}, REQUEST_CHAT_AUDIO_PERMISSION);
+                return;
+            }
+
+            try {
+                JSONObject chatParams = new JSONObject(arg1);
+                String token = chatParams.optString("token");
+                String userNickName = chatParams.optString("userNickName");
+                if(chatClient == null){
+                    VoiceChatClient.Listener listener = new CocosChatListener();
+                    chatClient = new VoiceChatClient(this.activity, listener);
+                }
+                String url = "wss://test.paipai.xinjiaxianglao.com/chat/voice-chat?token="+token; // 默认测试环境
+//                String versionName = DeviceInfo.VERSION_NAME;
+//                if(!versionName.toLowerCase().endsWith("test")){
+//                    url = "wss://colapai.xinjiaxianglao.com/chat/voice-chat?token="+token; // 生产环境
+//                }
+                chatClient.startChat(url);
+            } catch (JSONException e) {
+                throw new RuntimeException(e);
+            }
             return;
         }
 
-        // TTS 控制
-        if (arg0.equals("TTS") && arg1.equals("connect")) {
-            // TTSManager.connect();
+        if (arg0.equals("CHAT:STOP")) {
+            if(chatClient != null){
+                chatClient.stopChat();
+                chatClient = null;
+            }
             return;
         }
-        if (arg0.equals("TTS") && arg1.equals("close")) {
-            // TTSManager.closeTTS();
+
+        if(arg0.equals("CHAT:RECORDING:START")){
+            if(chatClient != null){
+                chatClient.startRecording();
+            } else {
+                Log.e("BridgeCallback", "Chat client is not initialized");
+                JsbBridge.sendToScript("CHAT:RECORDING:ERROR", "Chat client is not initialized");
+            }
             return;
         }
-        if (arg0.equals("TTS")) { // 发送文本
-//            try {
-//                JSONObject jsonObject = new JSONObject(arg1);
-//                String uid = jsonObject.getString("uid");
-//                String text = jsonObject.getString("text");
-//                TTSManager.send(uid, text);
-//            } catch (JSONException e) {
-//                Log.d("BridgeCallback", "TTS parse json fail.");
-//            }
+
+        if (arg0.equals("CHAT:RECORDING:STOP")) {
+            if(chatClient != null){
+                chatClient.stopRecording();
+            } else {
+                Log.e("BridgeCallback", "Chat client is not initialized");
+                JsbBridge.sendToScript("CHAT:RECORDING:ERROR", "Chat client is not initialized");
+            }
             return;
         }
+
 
         // 地址定位
         if (arg0.equals("ADDRESS") && arg1.equals("start")) {
@@ -286,7 +312,6 @@ public class BridgeCallback implements JsbBridge.ICallback {
                 String mpNo = "" ;
                 if(userInfo.has("mp_no"))
                     mpNo = userInfo.getString("mp_no");
-
                 String orgCode = "";
                 if(userInfo.has("org_code"))
                     orgCode = userInfo.getString("org_code");
