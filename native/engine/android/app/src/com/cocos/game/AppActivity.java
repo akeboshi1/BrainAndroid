@@ -277,7 +277,9 @@ public class AppActivity extends CocosActivity implements LifecycleOwner {
             boolean granted = isPermissionGranted(permissions, grantResults[0], new String[]{Manifest.permission.RECORD_AUDIO});
             Log.d("AppActivity", "REQUEST_CHAT_AUDIO_PERMISSION granted=" + granted);
              // 无论授予与否均通知脚本侧，避免脚本侧等待
-            JsbBridge.sendToScript("CHAT:RECORD_AUDIO:PERMISSION", granted ? "1" : "0");
+            JSONObject result = new JSONObject();
+            try { result.put("code", granted ? 0 : 1).put("message", granted ? "audio permission granted" : "audio permission denied"); } catch (JSONException ignored) {}
+            JsbBridge.sendToScript("CHAT:RECORDING:PERM", result.toString());
         }
     }
 

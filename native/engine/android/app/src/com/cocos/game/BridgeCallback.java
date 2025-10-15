@@ -58,6 +58,22 @@ public class BridgeCallback implements JsbBridge.ICallback {
             return;
         }
 
+        if (arg0.equals("CHAT:RECORDING:GET_PERM") && arg1.equals("start")) {
+            if (ContextCompat.checkSelfPermission(this.activity, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+                requestPermissions(this.activity, new String[]{Manifest.permission.RECORD_AUDIO}, REQUEST_CHAT_AUDIO_PERMISSION);
+                return;
+            }else{
+                JSONObject result = new JSONObject();
+                try {
+                    result.put("code", 0);
+                    result.put("message", "audio permission granted");
+                } catch (JSONException e) {
+                    Log.e("BridgeCallback", "JSON error", e);
+                }
+                JsbBridge.sendToScript("CHAT:RECORDING:PERM", result.toString());
+            }
+        }
+
         if (arg0.equals("CHAT:START")) {
             Log.d("BridgeCallback","chat start params: "+arg1);
 
