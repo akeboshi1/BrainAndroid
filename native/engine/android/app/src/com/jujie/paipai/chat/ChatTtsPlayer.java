@@ -85,7 +85,7 @@ public class ChatTtsPlayer {
         });
         runOnPlayer(() -> {
             AudioAttributes attrs = new AudioAttributes.Builder()
-                    .setUsage(C.USAGE_VOICE_COMMUNICATION)
+                    .setUsage(C.USAGE_MEDIA)
                     .setContentType(C.AUDIO_CONTENT_TYPE_SPEECH)
                     .build();
             player.setAudioAttributes(attrs, /* handleAudioFocus= */ false);
@@ -117,9 +117,9 @@ public class ChatTtsPlayer {
                 canceledCurrent = true;
             }
             queue.clear(); queue.addAll(remain);
-            if (canceledCurrent && current != null) {
-                // 主动出队并回调取消
-                queue.pollFirst();
+            if (canceledCurrent) {
+                // current 在上面被判定为 non-null 时才会设置 canceledCurrent，因此此处无需再次检查 current != null
+                // 注意：queue 已经被重建为不包含被取消的条目，调用 queue.pollFirst() 会误删非目标项，因此不能再 poll
                 currentPlayingMeta = null;
                 try { callback.onSegmentEnd(current.requestId, current.sequence, current.isFinalSegment, true); } catch (Exception ignored) {}
             }
@@ -176,4 +176,3 @@ public class ChatTtsPlayer {
         if (Looper.myLooper() == playerLooper) r.run(); else playerHandler.post(r);
     }
 }
-

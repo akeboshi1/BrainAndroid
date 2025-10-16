@@ -20,30 +20,14 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.Collections;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
- *  聊天客户端职责梳理：
- * 1) 连接管理：通过 WebSocket 与服务器通信，按服务器事件驱动 UI 与音频。
- * 2) 语音采集：使用 AudioRecord 以 16 kHz/PCM16 单声道采集，流式发送到服务器。
- * 3) 对话展示：处理 transcript/llm_delta/llm_complete 事件，按“你/大模型”分栏呈现。
- * 4) 语音播放：维护 TTS 队列，串行播放，支持 tts_cancel 实时打断。
- *
- * 关键设计点：
- * - 播放线程：由 TtsPlayer 内部封装，避免跨线程访问 ExoPlayer。
- * - 音频焦点：对通信用途（USAGE_VOICE_COMMUNICATION）禁用自动音频焦点（在 TtsPlayer 内处理）。
- * - 全双工：录音使用 VOICE_COMMUNICATION 源并启用 AEC/NS/AGC；系统音频模式切换为 MODE_IN_COMMUNICATION 以获得更稳定的双向通话路径。
- * - 路由策略：不强制外放；检测到耳机/蓝牙时关闭外放并交由系统路由至耳机。
- * - 中断策略：新回复触发时清空旧 TTS 队列，尽快播放最新一轮回复，保持“最新优先”。
+ * 聊天客户端：管理连接、录音、文本增量、TTS 播放与随播。
  */
 public class VoiceChatClient {
 
-    /**
-     * - onReady：服务器返回 ready，允许开始录音
-     * - onLog：调试日志
-     * - onUserTranscript：追加“你”的识别文本
-     * - onAssistantFinal：落地“大模型”最终回复
-     * - onConnectionClosed：连接关闭通知
-     */
     public interface Listener {
         void onReady();
         void onLog(@NonNull String line);
@@ -56,79 +40,57 @@ public class VoiceChatClient {
         void onRecordingStopped();
     }
 
-    // 应用上下文与回调
     private final Context app;
     private final Listener listener;
 
-    // 音频系统与录音增强效果（可用则启用）：AEC 回声消除、NS 降噪、AGC 自动增益
     private final AudioManager audioManager;
-    private boolean commModeApplied = false; // 是否已切到 MODE_IN_COMMUNICATION
+    private boolean commModeApplied = false;
 
-    // WebSocket 传输层
     private final ChatTransport transport;
 
-    // 不再直接持有 OkHttpClient/WebSocket
-    // private final OkHttpClient http
-    // private WebSocket ws;
-    private boolean isConnected = false; // 连接打开后置 true，由 ChatTransport 回调维护
-    private boolean isReady = false;     // 服务器是否返回 ready（允许录音）
+    private boolean isConnected = false;
+    private boolean isReady = false;
 
-    // 改由独立的 TtsPlayer 管理播放与队列
     private final ChatTtsPlayer ttsPlayer;
-
-    // 新增：MicRecorder 封装麦克风
     private @Nullable MicRecorder micRecorder;
 
-    // 录音配置：16 kHz/PCM16 单声道
     private static final int SAMPLE_RATE = 16000;
 
-    // TTS 流拼接任务：在 tts_start 与 tts_end 之间累积二进制块
     private static class TtsStreamJob {
         final String requestId; final int sequence; final boolean isFinal;
         final List<byte[]> buffers = new ArrayList<>();
-        String textDelta = ""; // 新增：增量文本
+        String textDelta = "";
         TtsStreamJob(String r, int s, boolean f){ requestId=r; sequence=s; isFinal=f; }
     }
-    private @Nullable TtsStreamJob activeStreamJob; // 当前活跃的 TTS 拼接任务
+    private @Nullable TtsStreamJob activeStreamJob;
 
-    // 新增：是否在收到 ready 后自动开始录音（用于“开始”一键连接+录音）
     private volatile boolean autoStartOnReady = false;
 
-    // 新增：时延统计（按 responseId）
     private final Map<String, Long> asrDoneAtMs = new java.util.HashMap<>();
     private final Set<String> firstAudioReported = new java.util.HashSet<>();
 
-    // 助手回复增量缓存：按 responseId 聚合 llm_delta，llm_complete 时落地
     private final Map<String, StringBuilder> assistantBuffers = new java.util.HashMap<>();
-    private @Nullable String activeResponseId = null; // 当前“最新优先”的响应 ID
-    // 新增：按 responseId 跟踪“已随播展示的字符位置”，用于在无 tts 文本时从 llm_delta 回退切片
+    private @Nullable String activeResponseId = null;
     private final Map<String, Integer> playbackDisplayedIndex = new java.util.HashMap<>();
-    // 新增：随播接管集合，避免 llm_complete 重复落地
     private final Set<String> ttsManagedResponses = new java.util.HashSet<>();
-    // 新增：按 responseId 聚合随播播报的已展示文本，最终段播放完成时一次性落地
     private final Map<String, StringBuilder> playbackTextBuffers = new java.util.HashMap<>();
 
-    /**
-     * 构造函数：
-     * - 初始化 TtsPlayer（内部自带播放器线程与 ExoPlayer）
-     * - 设置音频属性与回调在 TtsPlayer 内部完成
-     * - 初始化一次路由
-     */
+    private final Set<String> finalizedResponses = Collections.newSetFromMap(new ConcurrentHashMap<>());
+
     @UnstableApi
     public VoiceChatClient(@NonNull Context context, @NonNull Listener l) {
         this.app = context.getApplicationContext();
         this.listener = l;
         this.audioManager = (AudioManager) app.getSystemService(Context.AUDIO_SERVICE);
 
-        // 初始化 TtsPlayer，并桥接“随播文本/最终落地”的行为
         this.ttsPlayer = new ChatTtsPlayer(app, new ChatTtsPlayer.Callback() {
             @Override
             public void onSegmentStart(@NonNull String requestId, int sequence, @NonNull String textDelta) {
                 if (!textDelta.isEmpty()) {
-                    StringBuilder buf = playbackTextBuffers.computeIfAbsent(requestId, k -> new StringBuilder());
+                    StringBuilder buf = getOrCreateStringBuilder(playbackTextBuffers, requestId);
                     buf.append(textDelta);
                     try { listener.onAssistantDelta(textDelta); } catch (Exception ignored) {}
-                    int shown = playbackDisplayedIndex.getOrDefault(requestId, 0);
+                    int shown = getOrDefaultCompat(playbackDisplayedIndex, requestId, 0);
                     playbackDisplayedIndex.put(requestId, shown + textDelta.length());
                 }
             }
@@ -136,8 +98,9 @@ public class VoiceChatClient {
             public void onSegmentEnd(@NonNull String requestId, int sequence, boolean isFinalSegment, boolean canceled) {
                 if (!canceled && isFinalSegment) {
                     StringBuilder buf = playbackTextBuffers.remove(requestId);
-                    if (buf != null && buf.length() > 0) {
-                        try { listener.onAssistantFinal(buf.toString().trim()); } catch (Exception ignored) {}
+                    String content = (buf != null) ? buf.toString().trim() : "";
+                    if (!content.isEmpty()) {
+                        finalizeAssistantResponse(requestId, content);
                     }
                     ttsManagedResponses.remove(requestId);
                     playbackDisplayedIndex.remove(requestId);
@@ -145,7 +108,6 @@ public class VoiceChatClient {
             }
         });
 
-        // 初始化传输层并桥接事件
         this.transport = new ChatTransport(new ChatTransport.Listener() {
             @Override public void onOpen() {
                 isConnected = true;
@@ -160,28 +122,20 @@ public class VoiceChatClient {
             @Override public void onClosed(int code, @NonNull String reason) {
                 isConnected = false; isReady = false;
                 log("WebSocket 已关闭 code="+code+" reason="+reason+"，将尝试自动重连");
-                // 不回调 listener.onConnectionClosed()，避免上层触发 stopChat() 进而关闭重连
             }
             @Override public void onFailure(@NonNull Throwable t, @Nullable okhttp3.Response response) {
                 isConnected = false; isReady = false;
                 log("WebSocket 错误: "+t.getMessage()+"，将尝试自动重连");
-                // 不回调 listener.onConnectionClosed()，避免上层触发 stopChat() 进而关闭重连
             }
             @Override public void onReconnectScheduled(int attempt, long delayMs) {
                 log("计划第"+attempt+"次重连，延迟="+delayMs+"ms");
             }
         });
 
-        // 初始化一次路由
         updateOutputRoute();
     }
 
-    /**
-     * 建立 WebSocket 连接。
-     * - 成功 onOpen 后等待服务端下发 "ready" 事件才允许录音。
-     */
     public void connect(@NonNull String url){
-        // 启用自动重连并连接
         transport.setAutoReconnect(true);
         transport.setReconnectOnNormalClose(true);
         transport.connect(url);
@@ -189,11 +143,6 @@ public class VoiceChatClient {
         log("WebSocket 连接中 -> "+url);
     }
 
-    /**
-     * 断开连接并释放相关资源：
-     * - 停止录音，清空 TTS 队列，清理对话缓存
-     * - 关闭 WebSocket 与通信音频模式
-     */
     public void disconnect(){
         stopRecording();
         clearTtsQueue();
@@ -201,20 +150,9 @@ public class VoiceChatClient {
         transport.close();
         isConnected=false; isReady=false;
         applyCommunicationAudioMode(false);
-        // 用户主动断开才回调 onConnectionClosed
         listener.onConnectionClosed();
     }
 
-    /**
-     * 解析服务器 JSON 消息并分发到对应处理逻辑。
-     * 协议关键点：
-     * - ready：允许录音
-     * - transcript：追加“你”的文本
-     * - llm_delta：累计“大模型”增量
-     * - llm_complete：落地“大模型”最终文本
-     * - tts_start/tts_end：分段 TTS 拼接并入队串行播放
-     * - tts_cancel：清空队列并打断当前播放
-     */
     private void handleJsonMessage(String raw){
         try {
             JSONObject obj = new JSONObject(raw);
@@ -245,15 +183,19 @@ public class VoiceChatClient {
                 case "llm_delta": {
                     String delta = obj.optString("content");
                     if (responseId != null && !delta.isEmpty()) {
-                        StringBuilder sb = assistantBuffers.computeIfAbsent(responseId, k -> new StringBuilder());
+                        StringBuilder sb = getOrCreateStringBuilder(assistantBuffers, responseId);
                         sb.append(delta);
                     }
                     break; }
+                case "CHAT.ASSISTANT.FINAL":
                 case "llm_complete": {
                     if (responseId != null && ttsManagedResponses.contains(responseId)) {
                         log("LLM 完成(随播已接管)");
                     } else {
-                        if (responseId != null) finalizeAssistantResponse(responseId, obj.optString("text"));
+                        if (responseId != null) {
+                            String finalText = obj.optString("text", obj.optString("content", ""));
+                            finalizeAssistantResponse(responseId, finalText);
+                        }
                         log("LLM 完成");
                     }
                     break; }
@@ -269,7 +211,7 @@ public class VoiceChatClient {
                             String provided = obj.optString("text", obj.optString("content", ""));
                             if (provided.isEmpty()) {
                                 StringBuilder buf = assistantBuffers.get(responseId);
-                                int shown = playbackDisplayedIndex.getOrDefault(responseId, 0);
+                                int shown = getOrDefaultCompat(playbackDisplayedIndex, responseId, 0);
                                 if (buf != null && buf.length() > shown) {
                                     provided = buf.substring(shown);
                                 }
@@ -277,7 +219,7 @@ public class VoiceChatClient {
                             job.textDelta = provided;
                             activeStreamJob = job;
                             ttsManagedResponses.add(responseId);
-                            playbackTextBuffers.computeIfAbsent(responseId, k -> new StringBuilder());
+                            getOrCreateStringBuilder(playbackTextBuffers, responseId);
                             log("tts_start r="+responseId+" s="+seq);
                         }
                     }
@@ -314,9 +256,6 @@ public class VoiceChatClient {
         } catch (Exception e){ log("解析错误: "+e.getMessage()); }
     }
 
-    /**
-     * 累积 TTS 二进制音频块（通常为编码后音频，比如 mp3/opus/wav 等，需与播放器内 MIME 对齐）
-     */
     private void handleBinary(byte[] bytes){
         TtsStreamJob job = activeStreamJob;
         if (job != null && isActiveResponse(job.requestId)) {
@@ -334,17 +273,11 @@ public class VoiceChatClient {
         }
     }
 
-    /**
-     * 判断 response 是否为当前“最新优先”的活跃响应。
-     */
     private boolean isActiveResponse(@Nullable String responseId){
         if (responseId == null) return activeResponseId == null;
         return activeResponseId == null || responseId.equals(activeResponseId);
     }
 
-    /**
-     * 新一轮回复开始：旧的先落地并清空播放（最新优先）。
-     */
     private void startNewResponse(@Nullable String responseId){
         if (responseId == null) return;
         if (activeResponseId != null) {
@@ -357,28 +290,22 @@ public class VoiceChatClient {
             playbackDisplayedIndex.remove(activeResponseId);
         }
         activeResponseId = responseId;
-        assistantBuffers.computeIfAbsent(responseId, k -> new StringBuilder()).setLength(0);
-        playbackDisplayedIndex.put(responseId, playbackDisplayedIndex.getOrDefault(responseId, 0));
+        getOrCreateStringBuilder(assistantBuffers, responseId).setLength(0);
+        playbackDisplayedIndex.put(responseId, 0);
     }
 
-    /**
-     * 完成回复：聚合最终文本并通知 UI。
-     */
     private void finalizeAssistantResponse(@NonNull String responseId, @Nullable String finalText){
+        boolean first = finalizedResponses.add(responseId);
         StringBuilder sb = assistantBuffers.remove(responseId);
         String content = (finalText != null && !finalText.isEmpty()) ? finalText : (sb != null ? sb.toString() : "");
-        if (!content.isEmpty()) listener.onAssistantFinal(content.trim());
+        if (first && !content.isEmpty()) listener.onAssistantFinal(content.trim());
         if (responseId.equals(activeResponseId)) activeResponseId = null;
     }
 
-    /**
-     * 入队一段 TTS 音频。
-     */
     private void enqueueTts(@NonNull String requestId, int sequence, @NonNull byte[] audio, @NonNull String textDelta, boolean isFinalSegment){
         ttsPlayer.enqueue(requestId, sequence, audio, textDelta, isFinalSegment);
     }
 
-    /** 取消某个 responseId 的所有 TTS，并清理随播状态 */
     private void cancelTtsForResponse(@NonNull String responseId){
         ttsPlayer.cancelForResponse(responseId);
         playbackTextBuffers.remove(responseId);
@@ -386,14 +313,10 @@ public class VoiceChatClient {
         playbackDisplayedIndex.remove(responseId);
     }
 
-    /** 清空 TTS 队列并停止播放 */
     private void clearTtsQueue(){
         ttsPlayer.clear();
     }
 
-    /**
-     * 开始录音并将 PCM16 流式发送至服务器。
-     */
     public void startRecording(){
         if (!isConnected || !isReady) return;
         if (micRecorder != null && micRecorder.isRunning()) return;
@@ -413,13 +336,10 @@ public class VoiceChatClient {
         });
         if (ok) {
             log("开始录音 16kHz PCM16");
+            listener.onRecordingReady();
         }
-        listener.onRecordingReady();
     }
 
-    /**
-     * 停止录音并释放资源。
-     */
     public void stopRecording(){
         if (micRecorder != null) {
             try { micRecorder.stop(); } catch (Exception ignored) {}
@@ -429,9 +349,6 @@ public class VoiceChatClient {
         listener.onRecordingStopped();
     }
 
-    /**
-     * 切换系统音频模式与输出路由。
-     */
     private void applyCommunicationAudioMode(boolean enable){
         try {
             if (audioManager == null) return;
@@ -500,13 +417,11 @@ public class VoiceChatClient {
         playbackTextBuffers.clear();
         ttsManagedResponses.clear();
         playbackDisplayedIndex.clear();
+        finalizedResponses.clear();
     }
 
     private void log(String s){ listener.onLog(s); }
 
-    /**
-     * 释放播放器相关资源（在页面销毁时调用）。
-     */
     public void release() {
         try { ttsPlayer.release(); } catch (Exception ignored) {}
         try { transport.release(); } catch (Exception ignored) {}
@@ -518,10 +433,23 @@ public class VoiceChatClient {
         connect(url);
     }
 
-    // 一键结束：停止录音并断开
     public void stopChat() {
         autoStartOnReady = false;
         disconnect();
     }
 
+    private static <K, V> V getOrDefaultCompat(Map<K, V> map, K key, V def) {
+        V v = map.get(key);
+        return v != null ? v : def;
+    }
+
+    private static <K> StringBuilder getOrCreateStringBuilder(Map<K, StringBuilder> map, K key) {
+        StringBuilder sb = map.get(key);
+        if (sb == null) {
+            sb = new StringBuilder();
+            map.put(key, sb);
+        }
+        return sb;
+    }
 }
+

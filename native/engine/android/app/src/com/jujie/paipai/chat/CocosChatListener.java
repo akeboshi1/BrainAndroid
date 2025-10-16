@@ -11,14 +11,16 @@ import com.cocos.lib.JsbBridge;
 import org.json.JSONObject;
 
 import java.lang.reflect.Method;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
 
 /**
- * 面向 Cocos Creator 3.8 的桥接监听器：
+ * 面向 Cocos Creator 的桥接监听器：
  * - 实现 VoiceChatClient.Listener
- * - 通过反射调用 com.cocos.lib.JsbBridge#sendToScript(String, String)
- * - 优先在 Cocos 游戏线程执行（com.cocos.lib.CocosHelper#runOnGameThread），不可用则回落主线程
+ * - 尝试通过反射调用 com.cocos.lib.JsbBridge#sendToScript(String, String)
+ * - 优先在 Cocos 游戏线程执行（若可通过反射获取 com.cocos.lib.CocosHelper#runOnGameThread），不可用则回落主线程
  *
- * 说明：使用反射以避免在未集成 cocos 原生库时的编译期依赖问题。
+ * 主要修复点：避免短时间内重复发送相同事件导致双发（日志中出现两遍 sendToCocos）。
  */
 public final class CocosChatListener implements VoiceChatClient.Listener {
 
@@ -26,32 +28,91 @@ public final class CocosChatListener implements VoiceChatClient.Listener {
 
     private final Handler main = new Handler(Looper.getMainLooper());
 
-    // 反射缓存
-    private static Class<?> sJsbBridgeCls;
+    // 仅缓存 Method 对象，避免未集成 cocos 时编译期依赖
     private static Method sSendToScript;
-    private static Class<?> sCocosHelperCls;
     private static Method sRunOnGameThread;
+
+    // 去重缓存：跨实例/跨线程安全的最近发送键缓存（key -> 上次发送时间 millis）
+    // 防止短时间内同一事件被重复发送（例如来自多条路径的重复回调）
+    private static final ConcurrentHashMap<String, Long> sRecentSends = new ConcurrentHashMap<>();
+    private static final long RECENT_WINDOW_MS = TimeUnit.SECONDS.toMillis(1); // 1s 窗口
+
+    // 额外短时去重（同一实例内更严格的短时间去重）
+    private static String sLastEvent;
+    private static String sLastJson;
+    private static long sLastTsMillis;
+    private static final long DUPLICATE_WINDOW_MS = 300; // 300ms
+
+    static {
+        // 尝试反射查找 JsbBridge.sendToScript 和 CocosHelper.runOnGameThread
+        try {
+            Class<?> jb = Class.forName("com.cocos.lib.JsbBridge");
+            sSendToScript = jb.getMethod("sendToScript", String.class, String.class);
+        } catch (Throwable ignored) {
+            sSendToScript = null;
+        }
+        try {
+            Class<?> ch = Class.forName("com.cocos.lib.CocosHelper");
+            sRunOnGameThread = ch.getMethod("runOnGameThread", Runnable.class);
+        } catch (Throwable ignored) {
+            sRunOnGameThread = null;
+        }
+    }
 
     private void runOnGameThread(@NonNull Runnable task) {
         try {
-            if (sRunOnGameThread != null && sCocosHelperCls != null) {
+            if (sRunOnGameThread != null) {
                 sRunOnGameThread.invoke(null, task);
                 return;
             }
         } catch (Throwable t) {
-            Log.w(TAG, "runOnGameThread fallback: " + t.getMessage());
+            Log.w(TAG, "runOnGameThread reflect failed, fallback to main: " + t.getMessage());
         }
-        // 回落到主线程
         main.post(task);
     }
 
     private void sendToCocos(@NonNull String event, @NonNull JSONObject payload) {
         final String json = payload.toString();
+        final String key = event + '|' + json;
+
+        long now = System.currentTimeMillis();
+        // 跨实例/线程去重
+        Long prev = sRecentSends.get(key);
+        if (prev != null && (now - prev) < RECENT_WINDOW_MS) {
+            Log.d(TAG, "suppress duplicate recent sendToCocos " + event + " " + json);
+            return;
+        }
+        sRecentSends.put(key, now);
+
+        // 同一实例内更严格的短时去重
+        synchronized (CocosChatListener.class) {
+            if (event.equals(sLastEvent) && json.equals(sLastJson) && (now - sLastTsMillis) < DUPLICATE_WINDOW_MS) {
+                Log.d(TAG, "suppress duplicate sendToCocos (short) " + event + " " + json);
+                return;
+            }
+            sLastEvent = event;
+            sLastJson = json;
+            sLastTsMillis = now;
+        }
+
         runOnGameThread(() -> {
             try {
+                // 日志仅在真正进入发送流程时打印
                 Log.d(TAG, "sendToCocos " + event + " " + json);
-                JsbBridge.sendToScript(event, payload.toString());
-                // todo: Log.i(TAG, "[noop] sendToScript(" + event + ", " + json + ")");
+
+                // 优先使用反射调用（若成功），否则回退到直接调用
+                if (sSendToScript != null) {
+                    try {
+                        sSendToScript.invoke(null, event, json);
+                        return;
+                    } catch (Throwable t) {
+                        Log.w(TAG, "reflect sendToScript failed, fallback: " + t.getMessage());
+                        // fallthrough
+                    }
+                }
+
+                // 直接调用作为最后回退
+                JsbBridge.sendToScript(event, json);
             } catch (Throwable t) {
                 Log.e(TAG, "sendToCocos error: " + t.getMessage());
             }
@@ -81,7 +142,6 @@ public final class CocosChatListener implements VoiceChatClient.Listener {
         // sendToCocos("chat.log", jText(line));
     }
 
-
     @Override
     public void onUserTranscript(@NonNull String text) {
         sendToCocos("CHAT:USER", jText(text));
@@ -89,7 +149,6 @@ public final class CocosChatListener implements VoiceChatClient.Listener {
 
     @Override
     public void onAssistantDelta(@NonNull String text) {
-        // sendToCocos("chat.assistant.delta", jText(text));
         sendToCocos("CHAT.ASSISTANT.DELTA", jText(text));
     }
 
@@ -118,4 +177,3 @@ public final class CocosChatListener implements VoiceChatClient.Listener {
         sendToCocos("CHAT.STOPPED", jPair("reason", "normal"));
     }
 }
-
