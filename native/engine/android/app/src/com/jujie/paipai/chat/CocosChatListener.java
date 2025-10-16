@@ -149,22 +149,26 @@ public final class CocosChatListener implements VoiceChatClient.Listener {
 
     @Override
     public void onAssistantDelta(@NonNull String text) {
-        sendToCocos("CHAT.ASSISTANT.DELTA", jText(text));
+        if(text.startsWith("歌曲:")){
+            sendToCocos("CHAT:ASSISTANT:FINAL", jText(text));
+        }else{
+            sendToCocos("CHAT:ASSISTANT:DELTA", jText(text));
+        }
     }
 
     @Override
     public void onRecordingReady() {
-        sendToCocos("CHAT.RECORDING.READY", new JSONObject());
+        sendToCocos("CHAT:RECORDING:READY", new JSONObject());
     }
 
     @Override
     public void onRecordingStopped() {
-        sendToCocos("CHAT.RECORDING.STOPPED", new JSONObject());
+        sendToCocos("CHAT:RECORDING:STOPPED", new JSONObject());
     }
 
     @Override
     public void onAssistantFinal(@NonNull String text) {
-        sendToCocos("CHAT.ASSISTANT.FINAL", jText(text));
+        sendToCocos("CHAT:ASSISTANT:FINAL", jText(text));
     }
 
     @Override
@@ -174,6 +178,6 @@ public final class CocosChatListener implements VoiceChatClient.Listener {
 
     @Override
     public void onConnectionClosed() {
-        sendToCocos("CHAT.STOPPED", jPair("reason", "normal"));
+        sendToCocos("CHAT:STOPPED", jPair("reason", "normal"));
     }
 }

@@ -187,7 +187,6 @@ public class VoiceChatClient {
                         sb.append(delta);
                     }
                     break; }
-                case "CHAT.ASSISTANT.FINAL":
                 case "llm_complete": {
                     if (responseId != null && ttsManagedResponses.contains(responseId)) {
                         log("LLM 完成(随播已接管)");
