@@ -179,14 +179,16 @@ public class VoiceChatClient {
                     String userText = obj.optString("text");
                     if (!userText.isEmpty()) listener.onUserTranscript(userText);
                     log("LLM 请求中");
-                    break; }
+                    break;
+                }
                 case "llm_delta": {
                     String delta = obj.optString("content");
                     if (responseId != null && !delta.isEmpty()) {
                         StringBuilder sb = getOrCreateStringBuilder(assistantBuffers, responseId);
                         sb.append(delta);
                     }
-                    break; }
+                    break;
+                }
                 case "llm_complete": {
                     if (responseId != null && ttsManagedResponses.contains(responseId)) {
                         log("LLM 完成(随播已接管)");
@@ -197,7 +199,8 @@ public class VoiceChatClient {
                         }
                         log("LLM 完成");
                     }
-                    break; }
+                    break;
+                }
                 case "tts_start": {
                     if (responseId != null) {
                         if (!responseId.equals(activeResponseId)) {
@@ -229,9 +232,21 @@ public class VoiceChatClient {
                     int seq = obj.optInt("sequence");
                     if (job != null && responseId != null && responseId.equals(job.requestId) && seq == job.sequence) {
                         String reason = obj.optString("reason");
-                        if ("completed".equals(reason) && !job.buffers.isEmpty()) {
-                            byte[] merged = merge(job.buffers);
-                            enqueueTts(job.requestId, job.sequence, merged, job.textDelta, job.isFinal);
+                        if ("completed".equals(reason)) {
+                            if (!job.buffers.isEmpty()) {
+                                byte[] merged = merge(job.buffers);
+                                enqueueTts(job.requestId, job.sequence, merged, job.textDelta, job.isFinal);
+                            } else {
+                                // 无音频块的完成：直接按文本结束，避免遗漏 onSegmentEnd
+                                if (job.isFinal) {
+                                    finalizeAssistantResponse(job.requestId, job.textDelta);
+                                } else if (job.textDelta != null && !job.textDelta.isEmpty()) {
+                                    try { listener.onAssistantDelta(job.textDelta); } catch (Exception ignored) {}
+                                }
+                                ttsManagedResponses.remove(job.requestId);
+                                playbackTextBuffers.remove(job.requestId);
+                                playbackDisplayedIndex.remove(job.requestId);
+                            }
                         } else {
                             log("TTS 未完成, reason="+reason);
                         }
@@ -451,4 +466,3 @@ public class VoiceChatClient {
         return sb;
     }
 }
-
