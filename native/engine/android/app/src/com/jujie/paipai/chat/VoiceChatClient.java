@@ -233,12 +233,17 @@ public class VoiceChatClient {
                     if (job != null && responseId != null && responseId.equals(job.requestId) && seq == job.sequence) {
                         String reason = obj.optString("reason");
                         if ("completed".equals(reason)) {
+                            // 优先以 tts_end 携带的 isFinal/final 为准，若缺失再回退到 tts_start 的标志
+                            boolean isFinalSeg = obj.has("isFinal") || obj.has("final")
+                                    ? obj.optBoolean("isFinal", obj.optBoolean("final", false))
+                                    : job.isFinal;
                             if (!job.buffers.isEmpty()) {
                                 byte[] merged = merge(job.buffers);
-                                enqueueTts(job.requestId, job.sequence, merged, job.textDelta, job.isFinal);
+                                // 这里传入最终段标志，确保单段语音也能触发 onAssistantFinal
+                                enqueueTts(job.requestId, job.sequence, merged, job.textDelta, isFinalSeg);
                             } else {
                                 // 无音频块的完成：直接按文本结束，避免遗漏 onSegmentEnd
-                                if (job.isFinal) {
+                                if (isFinalSeg) {
                                     finalizeAssistantResponse(job.requestId, job.textDelta);
                                 } else if (job.textDelta != null && !job.textDelta.isEmpty()) {
                                     try { listener.onAssistantDelta(job.textDelta); } catch (Exception ignored) {}
