@@ -351,6 +351,8 @@ public class VoiceChatClient {
         if (ok) {
             log("开始录音 16kHz PCM16");
             listener.onRecordingReady();
+            // 启动asr
+            transport.sendText("{\"type\":\"start_asr\"}");
         }
     }
 
