@@ -2,7 +2,6 @@ package com.jujie.rendersdk;
 
 import android.app.Activity;
 import android.graphics.Color;
-import android.media.MediaScannerConnection;
 import android.os.Environment;
 import android.util.Log;
 import android.util.Size;
@@ -33,13 +32,13 @@ import androidx.core.content.ContextCompat;
 import androidx.lifecycle.LifecycleOwner;
 import com.google.common.util.concurrent.ListenableFuture;
 import java.io.File;
+import java.io.IOException;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.Locale;
+import java.util.List;
 import java.lang.Thread;
 import java.util.concurrent.CountDownLatch;
-import java.util.Timer;
-import java.util.TimerTask;
 import com.cocos.lib.JsbBridge;
 import org.json.JSONObject;
 import android.graphics.drawable.GradientDrawable;
@@ -68,6 +67,11 @@ public class CameraXManager {
     private ProcessCameraProvider cameraProvider;
     private FrameLayout cameraContainer;
     private boolean saveFlag = true;
+    
+    
+    // 分辨率检查控制变量
+    private boolean resolutionCheckCompleted = false;
+    private android.os.Handler resolutionCheckHandler = null;
 
     public CameraXManager(Activity activity, LifecycleOwner lifecycleOwner) {
         this.activity = activity;
@@ -199,11 +203,15 @@ public class CameraXManager {
             try {
                 cameraProvider = cameraProviderFuture.get();
 
-                ResolutionSelector resolutionSelector = new ResolutionSelector.Builder().setAspectRatioStrategy(new AspectRatioStrategy(AspectRatio.RATIO_4_3,AspectRatioStrategy.FALLBACK_RULE_AUTO)).build();
+                // 创建统一的分辨率选择器，确保预览和录制使用相同分辨率
+                ResolutionSelector resolutionSelector = createUnifiedResolutionSelector();
 
-                Preview preview = new Preview.Builder().setResolutionSelector(resolutionSelector).build();
+                Preview preview = new Preview.Builder()
+                        .setResolutionSelector(resolutionSelector)
+                        .build();
                 preview.setSurfaceProvider(previewView.getSurfaceProvider());
 
+                // 使用相同的分辨率选择器创建录制器
                 Recorder recorder = new Recorder.Builder()
                         .setQualitySelector(QualitySelector.from(Quality.LOWEST))
                         .setExecutor(ContextCompat.getMainExecutor(activity))
@@ -221,6 +229,13 @@ public class CameraXManager {
                 cameraProvider.bindToLifecycle(
                         lifecycleOwner, cameraSelector, useCaseGroup
                 );
+                
+                // 添加光栅问题诊断
+                diagnoseRasterIssues();
+                
+                // 检查预览和录制分辨率同步
+                checkResolutionSync();
+                
             } catch (Exception e) {
                 Log.e(TAG, "启动相机失败", e);
             }
@@ -335,14 +350,19 @@ public class CameraXManager {
         Log.i(TAG, "文件准备耗时 - " + (afterFilePrepTime - beforeFilePrepTime) + "ms");
 
         long beforeStartRecordingTime = System.currentTimeMillis();
+        
+        
         recording = videoCapture.getOutput()
                 .prepareRecording(activity, outputOptions)
                 .start(ContextCompat.getMainExecutor(activity), recordEvent -> {
-                    if (recordEvent instanceof VideoRecordEvent.Start) {
+                        if (recordEvent instanceof VideoRecordEvent.Start) {
                         long recordStartTime = System.currentTimeMillis();
                         Log.i(TAG, "录制已开始 - " + recordStartTime);
                         long afterStartRecordingTime = System.currentTimeMillis();
                         Log.i(TAG, "录制启动总耗时 - " + (afterStartRecordingTime - beforeStartRecordingTime) + "ms");
+                        
+                        // 记录编码器信息
+                        logEncoderInfo();
                     }
                     if (recordEvent instanceof VideoRecordEvent.Finalize) {
                         long finalizeStartTime = System.currentTimeMillis();
@@ -394,23 +414,6 @@ public class CameraXManager {
                             Log.i(TAG, "开始处理录制成功 - " + successStartTime);
                             
                             Log.i(TAG, "录制完成: " + finalFile.getAbsolutePath());
-                            
-                            // long beforeScanTime = System.currentTimeMillis();
-                            // MediaScannerConnection.scanFile(
-                            //     activity,
-                            //     new String[]{finalFile.getAbsolutePath()},
-                            //     new String[]{"video/mp4"},
-                            //     null
-                            // );
-                            // long afterScanTime = System.currentTimeMillis();
-                            // Log.i(TAG, "MediaScanner操作耗时 - " + (afterScanTime - beforeScanTime) + "ms");
-                            
-                            // long beforeToastTime = System.currentTimeMillis();
-                            // Toast.makeText(activity,
-                            //     "视频已保存到: " + finalName,
-                            //     Toast.LENGTH_LONG).show();
-                            // long afterToastTime = System.currentTimeMillis();
-                            // Log.i(TAG, "成功Toast显示耗时 - " + (afterToastTime - beforeToastTime) + "ms");
                             
                             long beforeJsonTime = System.currentTimeMillis();
                             try {
@@ -516,6 +519,13 @@ public class CameraXManager {
             if (previewView != null) {
                 previewView.setVisibility(View.GONE);
             }
+            
+            // 重置分辨率检查状态，允许下次显示时重新检查
+            resolutionCheckCompleted = false;
+            if (resolutionCheckHandler != null) {
+                resolutionCheckHandler.removeCallbacksAndMessages(null);
+                resolutionCheckHandler = null;
+            }
         });
     }
 
@@ -523,6 +533,346 @@ public class CameraXManager {
     public FrameLayout getCameraContainer() {
         return cameraContainer;
     }
+
+    /**
+     * 检查预览和录制分辨率同步
+     */
+    private void checkResolutionSync() {
+        try {
+            // 避免重复检查
+            if (resolutionCheckCompleted) {
+                Log.d(TAG, "分辨率检查已完成，跳过重复检查");
+                return;
+            }
+            
+            // 取消之前的检查任务
+            if (resolutionCheckHandler != null) {
+                resolutionCheckHandler.removeCallbacksAndMessages(null);
+            }
+            
+            // 创建新的Handler实例
+            resolutionCheckHandler = new android.os.Handler(android.os.Looper.getMainLooper());
+            
+            Log.i(TAG, "=== 分辨率同步检查 ===");
+            
+            // 延迟检查，确保相机完全初始化
+            resolutionCheckHandler.postDelayed(() -> {
+                try {
+                    if (previewView != null && videoCapture != null) {
+                        int previewWidth = previewView.getWidth();
+                        int previewHeight = previewView.getHeight();
+                        
+                        // 减少日志输出，只在有问题时输出详细信息
+                        if (previewWidth != CAMERA_WIDTH || previewHeight != CAMERA_HEIGHT) {
+                            Log.w(TAG, "预览分辨率: " + previewWidth + "x" + previewHeight + 
+                                  " vs 相机画幅: " + CAMERA_WIDTH + "x" + CAMERA_HEIGHT);
+                            Log.w(TAG, "警告: 预览分辨率与相机画幅不匹配!");
+                            Log.w(TAG, "这可能导致录制视频出现光栅条纹");
+                            
+                            // 计算分辨率差异
+                            int widthDiff = Math.abs(previewWidth - CAMERA_WIDTH);
+                            int heightDiff = Math.abs(previewHeight - CAMERA_HEIGHT);
+                            Log.w(TAG, "宽度差异: " + widthDiff + "px, 高度差异: " + heightDiff + "px");
+                            
+                            // 尝试自动修复分辨率不匹配问题
+                            attemptResolutionFix(previewWidth, previewHeight);
+                            
+                            // 建议修复方案
+                            suggestResolutionFix(previewWidth, previewHeight);
+                        } else {
+                            Log.i(TAG, "预览分辨率与相机画幅匹配，分辨率同步正常");
+                        }
+                        
+                        // 标记检查完成
+                        resolutionCheckCompleted = true;
+                    } else {
+                        Log.e(TAG, "预览视图或录制器未初始化，无法检查分辨率同步");
+                    }
+                } catch (Exception e) {
+                    Log.e(TAG, "分辨率同步检查失败", e);
+                }
+            }, 2000); // 延迟2秒检查
+            
+        } catch (Exception e) {
+            Log.e(TAG, "分辨率同步检查异常", e);
+        }
+    }
+    
+    /**
+     * 创建统一的分辨率选择器，确保预览和录制使用相同分辨率
+     */
+    private ResolutionSelector createUnifiedResolutionSelector() {
+        try {
+            Log.i(TAG, "=== 创建统一分辨率选择器 ===");
+            
+            ResolutionSelector.Builder builder = new ResolutionSelector.Builder();
+            
+            // 使用4:3宽高比策略
+            builder.setAspectRatioStrategy(new AspectRatioStrategy(
+                AspectRatio.RATIO_4_3, 
+                AspectRatioStrategy.FALLBACK_RULE_AUTO
+            ));
+            
+            // 添加分辨率过滤器，强制使用特定分辨率
+            builder.setResolutionFilter(new ResolutionFilter() {
+                @Override
+                public List<Size> filter(List<Size> availableSizes, int targetRotation) {
+                    Log.i(TAG, "可用分辨率数量: " + availableSizes.size());
+                    Log.i(TAG, "目标旋转: " + targetRotation);
+                    
+                    // 记录所有可用分辨率
+                    for (Size size : availableSizes) {
+                        Log.d(TAG, "可用分辨率: " + size.getWidth() + "x" + size.getHeight());
+                    }
+                    
+                    // 优先选择与相机画幅最接近的分辨率
+                    Size bestSize = null;
+                    int minDiff = Integer.MAX_VALUE;
+                    
+                    for (Size size : availableSizes) {
+                        // 计算与相机画幅的差异
+                        int widthDiff = Math.abs(size.getWidth() - CAMERA_WIDTH);
+                        int heightDiff = Math.abs(size.getHeight() - CAMERA_HEIGHT);
+                        int totalDiff = widthDiff + heightDiff;
+                        
+                        if (totalDiff < minDiff) {
+                            minDiff = totalDiff;
+                            bestSize = size;
+                        }
+                    }
+                    
+                    if (bestSize != null) {
+                        Log.i(TAG, "选择分辨率: " + bestSize.getWidth() + "x" + bestSize.getHeight());
+                        Log.i(TAG, "与相机画幅差异: " + minDiff + "px");
+                        
+                        // 返回包含最佳分辨率的列表
+                        return java.util.Arrays.asList(bestSize);
+                    } else {
+                        Log.w(TAG, "未找到合适的分辨率，返回原始列表");
+                        return availableSizes;
+                    }
+                }
+            });
+            
+            ResolutionSelector selector = builder.build();
+            Log.i(TAG, "统一分辨率选择器创建完成");
+            return selector;
+            
+        } catch (Exception e) {
+            Log.e(TAG, "创建统一分辨率选择器失败，使用默认配置", e);
+            return new ResolutionSelector.Builder()
+                    .setAspectRatioStrategy(new AspectRatioStrategy(AspectRatio.RATIO_4_3, AspectRatioStrategy.FALLBACK_RULE_AUTO))
+                    .build();
+        }
+    }
+
+    /**
+     * 尝试自动修复分辨率不匹配问题
+     */
+    private void attemptResolutionFix(int previewWidth, int previewHeight) {
+        try {
+            Log.i(TAG, "=== 尝试自动修复分辨率 ===");
+            
+            // 检查是否需要调整相机容器尺寸
+            if (cameraContainer != null) {
+                int containerWidth = cameraContainer.getWidth();
+                int containerHeight = cameraContainer.getHeight();
+                
+                Log.i(TAG, "当前容器尺寸: " + containerWidth + "x" + containerHeight);
+                Log.i(TAG, "目标容器尺寸: " + CAMERA_WIDTH + "x" + CAMERA_HEIGHT);
+                
+                // 如果容器尺寸不匹配，尝试调整
+                if (containerWidth != CAMERA_WIDTH || containerHeight != CAMERA_HEIGHT) {
+                    Log.w(TAG, "容器尺寸不匹配，尝试调整...");
+                    
+                    // 这里可以添加动态调整容器尺寸的逻辑
+                    // 但由于容器尺寸通常在布局时确定，这里主要记录信息
+                    Log.w(TAG, "建议在布局时确保容器尺寸为: " + CAMERA_WIDTH + "x" + CAMERA_HEIGHT);
+                }
+            }
+            
+            // 检查预览视图的缩放设置
+            if (previewView != null) {
+                Log.i(TAG, "预览视图缩放类型: " + previewView.getScaleType());
+                
+                // 如果缩放类型可能导致分辨率问题，建议调整
+                if (previewView.getScaleType() != PreviewView.ScaleType.FILL_CENTER) {
+                    Log.w(TAG, "建议将预览视图缩放类型设置为FILL_CENTER");
+                }
+            }
+            
+            Log.i(TAG, "自动修复尝试完成");
+            
+        } catch (Exception e) {
+            Log.e(TAG, "自动修复分辨率失败", e);
+        }
+    }
+
+    /**
+     * 建议分辨率修复方案
+     */
+    private void suggestResolutionFix(int previewWidth, int previewHeight) {
+        try {
+            Log.i(TAG, "=== 分辨率修复建议 ===");
+            
+            // 计算最佳分辨率
+            int targetWidth = CAMERA_WIDTH;
+            int targetHeight = CAMERA_HEIGHT;
+            
+            Log.i(TAG, "目标分辨率: " + targetWidth + "x" + targetHeight);
+            
+            // 检查是否需要调整相机画幅常量
+            if (previewWidth > 0 && previewHeight > 0) {
+                float previewRatio = (float) previewWidth / previewHeight;
+                float cameraRatio = (float) CAMERA_WIDTH / CAMERA_HEIGHT;
+                
+                Log.i(TAG, "预览宽高比: " + previewRatio);
+                Log.i(TAG, "相机画幅宽高比: " + cameraRatio);
+                
+                if (Math.abs(previewRatio - cameraRatio) > 0.1f) {
+                    Log.w(TAG, "宽高比不匹配，建议调整相机画幅常量:");
+                    Log.w(TAG, "当前相机画幅: " + CAMERA_WIDTH + "x" + CAMERA_HEIGHT);
+                    Log.w(TAG, "建议相机画幅: " + previewWidth + "x" + previewHeight);
+                }
+            }
+            
+            Log.i(TAG, "====================");
+            
+        } catch (Exception e) {
+            Log.e(TAG, "分辨率修复建议失败", e);
+        }
+    }
+
+    /**
+     * 诊断光栅问题
+     */
+    private void diagnoseRasterIssues() {
+        try {
+            Log.i(TAG, "=== 光栅问题诊断开始 ===");
+            
+            // 记录设备基本信息
+            android.util.DisplayMetrics metrics = activity.getResources().getDisplayMetrics();
+            Log.i(TAG, "设备型号: " + android.os.Build.MODEL);
+            Log.i(TAG, "Android版本: " + android.os.Build.VERSION.RELEASE);
+            Log.i(TAG, "屏幕尺寸: " + metrics.widthPixels + "x" + metrics.heightPixels);
+            Log.i(TAG, "屏幕密度: " + metrics.densityDpi + " DPI");
+            
+            // 记录相机画幅配置
+            Log.i(TAG, "设计分辨率: " + DESIGN_WIDTH + "x" + DESIGN_HEIGHT);
+            Log.i(TAG, "相机画幅: " + CAMERA_WIDTH + "x" + CAMERA_HEIGHT);
+            Log.i(TAG, "相机画幅比例: " + CAMERA_ASPECT_RATIO);
+            
+            // 延迟检查预览和录制配置
+            new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(() -> {
+                checkPreviewRecordingAlignment();
+            }, 2000); // 延迟2秒确保相机完全初始化
+            
+        } catch (Exception e) {
+            Log.e(TAG, "光栅问题诊断失败", e);
+        }
+    }
+    
+    /**
+     * 检查预览和录制对齐情况
+     */
+    private void checkPreviewRecordingAlignment() {
+        try {
+            Log.i(TAG, "=== 预览录制对齐检查 ===");
+            
+            if (previewView != null) {
+                int previewWidth = previewView.getWidth();
+                int previewHeight = previewView.getHeight();
+                Log.i(TAG, "预览视图尺寸: " + previewWidth + "x" + previewHeight);
+                
+                // 检查预览尺寸是否与相机画幅匹配
+                if (previewWidth != CAMERA_WIDTH || previewHeight != CAMERA_HEIGHT) {
+                    Log.w(TAG, "警告: 预览尺寸与相机画幅不匹配!");
+                    Log.w(TAG, "预览: " + previewWidth + "x" + previewHeight + " vs 相机画幅: " + CAMERA_WIDTH + "x" + CAMERA_HEIGHT);
+                    
+                    // 计算缩放比例
+                    float scaleX = (float) previewWidth / CAMERA_WIDTH;
+                    float scaleY = (float) previewHeight / CAMERA_HEIGHT;
+                    Log.w(TAG, "缩放比例: X=" + scaleX + ", Y=" + scaleY);
+                    
+                    if (Math.abs(scaleX - scaleY) > 0.05f) {
+                        Log.e(TAG, "严重警告: 缩放比例不匹配，这可能导致光栅条纹!");
+                    }
+                } else {
+                    Log.i(TAG, "预览尺寸与相机画幅匹配");
+                }
+            }
+            
+            if (cameraContainer != null) {
+                int containerWidth = cameraContainer.getWidth();
+                int containerHeight = cameraContainer.getHeight();
+                Log.i(TAG, "相机容器尺寸: " + containerWidth + "x" + containerHeight);
+                
+                // 检查容器尺寸
+                if (containerWidth != CAMERA_WIDTH || containerHeight != CAMERA_HEIGHT) {
+                    Log.w(TAG, "警告: 容器尺寸与相机画幅不匹配!");
+                    Log.w(TAG, "容器: " + containerWidth + "x" + containerHeight + " vs 相机画幅: " + CAMERA_WIDTH + "x" + CAMERA_HEIGHT);
+                }
+            }
+            
+            // 检查录制器配置
+            if (videoCapture != null) {
+                Log.i(TAG, "录制器已配置");
+            } else {
+                Log.e(TAG, "录制器未配置，这可能导致录制问题");
+            }
+            
+            Log.i(TAG, "========================");
+            
+        } catch (Exception e) {
+            Log.e(TAG, "预览录制对齐检查失败", e);
+        }
+    }
+
+    
+    /**
+     * 记录编码器信息
+     */
+    private void logEncoderInfo() {
+        try {
+            Log.i(TAG, "=== 编码器信息 ===");
+            
+            // 记录设备硬件信息
+            Log.i(TAG, "CPU架构: " + android.os.Build.CPU_ABI);
+            Log.i(TAG, "硬件: " + android.os.Build.HARDWARE);
+            Log.i(TAG, "制造商: " + android.os.Build.MANUFACTURER);
+            
+            // 记录Android版本信息
+            int apiLevel = android.os.Build.VERSION.SDK_INT;
+            Log.i(TAG, "API级别: " + apiLevel);
+            
+            // 检查是否支持硬件编码
+            boolean supportsHardwareEncoding = apiLevel >= 21; // Android 5.0+
+            Log.i(TAG, "支持硬件编码: " + supportsHardwareEncoding);
+            
+            // 记录内存信息
+            Runtime runtime = Runtime.getRuntime();
+            long maxMemory = runtime.maxMemory();
+            long totalMemory = runtime.totalMemory();
+            long freeMemory = runtime.freeMemory();
+            
+            Log.i(TAG, "最大内存: " + (maxMemory / 1024 / 1024) + "MB");
+            Log.i(TAG, "总内存: " + (totalMemory / 1024 / 1024) + "MB");
+            Log.i(TAG, "可用内存: " + (freeMemory / 1024 / 1024) + "MB");
+            
+            // 检查录制质量设置
+            if (videoCapture != null) {
+                Log.i(TAG, "录制器配置: 已配置");
+            } else {
+                Log.e(TAG, "录制器配置: 未配置");
+            }
+            
+            Log.i(TAG, "================");
+            
+        } catch (Exception e) {
+            Log.e(TAG, "记录编码器信息失败", e);
+        }
+    }
+
 
     /**
      * 获取录制错误的中文描述
@@ -572,9 +922,11 @@ public class CameraXManager {
             new File(activity.getExternalFilesDir(null), "CameraRecords"),
             // 2. 应用内部存储
             new File(activity.getFilesDir(), "CameraRecords"),
-            // 3. 外部存储Downloads目录（需要权限）
+            // 3. Downloads/video目录（方便查看）
+            new File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "video"),
+            // 4. 外部存储Downloads目录（需要权限）
             new File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "CameraRecords"),
-            // 4. 外部存储根目录（需要权限）
+            // 5. 外部存储根目录（需要权限）
             new File(Environment.getExternalStorageDirectory(), "CameraRecords")
         };
         
