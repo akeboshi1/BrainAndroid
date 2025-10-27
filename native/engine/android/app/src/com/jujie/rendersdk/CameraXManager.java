@@ -32,7 +32,11 @@ import androidx.core.content.ContextCompat;
 import androidx.lifecycle.LifecycleOwner;
 import com.google.common.util.concurrent.ListenableFuture;
 import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
 import java.io.IOException;
+import java.nio.channels.FileChannel;
+import android.media.MediaScannerConnection;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.Locale;
@@ -67,6 +71,9 @@ public class CameraXManager {
     private ProcessCameraProvider cameraProvider;
     private FrameLayout cameraContainer;
     private boolean saveFlag = true;
+    
+    // 复制到Downloads/video目录的开关
+    private boolean enableCopyToDownloads = false;
     
     
     // 分辨率检查控制变量
@@ -230,11 +237,10 @@ public class CameraXManager {
                         lifecycleOwner, cameraSelector, useCaseGroup
                 );
                 
-                // 添加光栅问题诊断
-                diagnoseRasterIssues();
+                // 延迟检查分辨率同步，避免影响相机启动性能
+                checkResolutionSyncAsync();
                 
-                // 检查预览和录制分辨率同步
-                checkResolutionSync();
+                Log.i(TAG, "相机启动完成");
                 
             } catch (Exception e) {
                 Log.e(TAG, "启动相机失败", e);
@@ -243,8 +249,7 @@ public class CameraXManager {
     }
 
     public void startRecording() {
-        long startTime = System.currentTimeMillis();
-        Log.i(TAG, "startRecording: 开始录制流程 - " + startTime);
+        Log.i(TAG, "startRecording: 开始录制流程");
         
         if (videoCapture == null) {
             Log.e(TAG, "startRecording: videoCapture is null");
@@ -252,10 +257,7 @@ public class CameraXManager {
         }
         
         // 获取合适的存储目录
-        long beforeStorageTime = System.currentTimeMillis();
         File appDir = getStorageDirectory();
-        long afterStorageTime = System.currentTimeMillis();
-        Log.i(TAG, "获取存储目录耗时 - " + (afterStorageTime - beforeStorageTime) + "ms");
         
         if (appDir == null) {
             Log.e(TAG, "startRecording: 无法获取有效的存储目录");
@@ -263,13 +265,9 @@ public class CameraXManager {
             return;
         }
         
-        // 检查存储空间 - 使用更准确的检查方法
-        long beforeSpaceCheckTime = System.currentTimeMillis();
+        // 检查存储空间
         long freeSpace = appDir.getFreeSpace();
         long requiredSpace = 100 * 1024 * 1024; // 100MB
-        long afterSpaceCheckTime = System.currentTimeMillis();
-        Log.i(TAG, "存储空间检查耗时 - " + (afterSpaceCheckTime - beforeSpaceCheckTime) + "ms");
-        Log.i(TAG, "startRecording: 存储目录=" + appDir.getAbsolutePath() + ", 可用存储空间=" + (freeSpace / 1024 / 1024) + "MB, 需要空间=" + (requiredSpace / 1024 / 1024) + "MB");
         
         if (freeSpace < requiredSpace) {
             Log.w(TAG, "startRecording: 存储空间不足");
@@ -277,43 +275,14 @@ public class CameraXManager {
             return;
         }
         
-        Log.i(TAG, "startRecording: 开始准备录制");
-        
         // 检查目录权限和可写性
-        long beforePermissionCheckTime = System.currentTimeMillis();
         if (!appDir.canWrite()) {
             Log.e(TAG, "startRecording: 目录无写入权限: " + appDir.getAbsolutePath());
             Toast.makeText(activity, "无法写入存储目录，请检查应用权限", Toast.LENGTH_LONG).show();
             return;
         }
         
-        // 尝试创建测试文件验证写入权限
-        File testFile = new File(appDir, "test_write.tmp");
-        try {
-            if (!testFile.createNewFile()) {
-                Log.w(TAG, "startRecording: 测试文件已存在，尝试删除");
-                if (!testFile.delete()) {
-                    Log.e(TAG, "startRecording: 无法删除测试文件，可能权限不足");
-                    Toast.makeText(activity, "存储权限不足，请检查应用权限设置", Toast.LENGTH_LONG).show();
-                    return;
-                }
-                if (!testFile.createNewFile()) {
-                    Log.e(TAG, "startRecording: 无法创建测试文件");
-                    Toast.makeText(activity, "无法写入存储，请检查存储权限", Toast.LENGTH_LONG).show();
-                    return;
-                }
-            }
-            testFile.delete(); // 删除测试文件
-        } catch (Exception e) {
-            Log.e(TAG, "startRecording: 测试文件创建失败", e);
-            Toast.makeText(activity, "存储访问失败: " + e.getMessage(), Toast.LENGTH_LONG).show();
-            return;
-        }
-        long afterPermissionCheckTime = System.currentTimeMillis();
-        Log.i(TAG, "权限检查耗时 - " + (afterPermissionCheckTime - beforePermissionCheckTime) + "ms");
-        
         // 生成唯一文件名，避免文件冲突
-        long beforeFilePrepTime = System.currentTimeMillis();
         String timeStamp = new SimpleDateFormat("yyyyMMdd_HHmmss_SSS", Locale.getDefault()).format(new Date());
         String name = "VID_" + timeStamp + ".mp4";
         File file = new File(appDir, name);
@@ -337,7 +306,7 @@ public class CameraXManager {
         
         Log.i(TAG, "startRecording: 录制文件路径=" + finalFile.getAbsolutePath());
 
-        // 创建输出选项，增加错误处理
+        // 创建输出选项
         FileOutputOptions outputOptions;
         try {
             outputOptions = new FileOutputOptions.Builder(finalFile).build();
@@ -346,34 +315,18 @@ public class CameraXManager {
             Toast.makeText(activity, "录制配置失败: " + e.getMessage(), Toast.LENGTH_LONG).show();
             return;
         }
-        long afterFilePrepTime = System.currentTimeMillis();
-        Log.i(TAG, "文件准备耗时 - " + (afterFilePrepTime - beforeFilePrepTime) + "ms");
-
-        long beforeStartRecordingTime = System.currentTimeMillis();
         
         
         recording = videoCapture.getOutput()
                 .prepareRecording(activity, outputOptions)
                 .start(ContextCompat.getMainExecutor(activity), recordEvent -> {
-                        if (recordEvent instanceof VideoRecordEvent.Start) {
-                        long recordStartTime = System.currentTimeMillis();
-                        Log.i(TAG, "录制已开始 - " + recordStartTime);
-                        long afterStartRecordingTime = System.currentTimeMillis();
-                        Log.i(TAG, "录制启动总耗时 - " + (afterStartRecordingTime - beforeStartRecordingTime) + "ms");
-                        
-                        // 记录编码器信息
-                        logEncoderInfo();
+                    if (recordEvent instanceof VideoRecordEvent.Start) {
+                        Log.i(TAG, "录制已开始");
                     }
                     if (recordEvent instanceof VideoRecordEvent.Finalize) {
-                        long finalizeStartTime = System.currentTimeMillis();
-                        Log.i(TAG, "录制Finalize事件开始 - " + finalizeStartTime);
-                        
                         VideoRecordEvent.Finalize finalizeEvent = (VideoRecordEvent.Finalize) recordEvent;
                 
                         if (finalizeEvent.hasError()) {
-                            long errorStartTime = System.currentTimeMillis();
-                            Log.i(TAG, "开始处理录制错误 - " + errorStartTime);
-                            
                             int errorCode = finalizeEvent.getError();
                             String errorMessage = getErrorMessage(errorCode);
                             Log.e(TAG, "录制失败: 错误码=" + errorCode + ", 错误信息=" + errorMessage);
@@ -384,53 +337,49 @@ public class CameraXManager {
                                 errorMessage = "录制配置无效，请检查存储权限或重启应用重试";
                             }
                             
-                            long beforeToastTime = System.currentTimeMillis();
                             Toast.makeText(activity, "录制失败: " + errorMessage, Toast.LENGTH_LONG).show();
-                            long afterToastTime = System.currentTimeMillis();
-                            Log.i(TAG, "错误Toast显示耗时 - " + (afterToastTime - beforeToastTime) + "ms");
                             
-                            long beforeJsonTime = System.currentTimeMillis();
                             try {
                                 JSONObject errorJson = new JSONObject();
                                 errorJson.put("code", 1);
                                 errorJson.put("error", errorMessage);
                                 errorJson.put("errorCode", errorCode);
-                                long afterJsonTime = System.currentTimeMillis();
-                                Log.i(TAG, "错误JSON创建耗时 - " + (afterJsonTime - beforeJsonTime) + "ms");
                                 
-                                long beforeBridgeTime = System.currentTimeMillis();
                                 JsbBridge.sendToScript("CAMERARECORDERRESULT", errorJson.toString());
-                                long afterBridgeTime = System.currentTimeMillis();
-                                Log.i(TAG, "错误JsbBridge发送耗时 - " + (afterBridgeTime - beforeBridgeTime) + "ms");
                             } catch (org.json.JSONException e) {
                                 Log.e(TAG, "创建错误JSON对象失败", e);
                                 JsbBridge.sendToScript("CAMERARECORDERRESULT", "{\"code\":1,\"error\":\"录制失败\",\"errorCode\":" + errorCode + "}");
                             }
-                            
-                            long errorEndTime = System.currentTimeMillis();
-                            Log.i(TAG, "错误处理总耗时 - " + (errorEndTime - errorStartTime) + "ms");
                         } else {
-                            long successStartTime = System.currentTimeMillis();
-                            Log.i(TAG, "开始处理录制成功 - " + successStartTime);
-                            
                             Log.i(TAG, "录制完成: " + finalFile.getAbsolutePath());
                             
-                            long beforeJsonTime = System.currentTimeMillis();
+                            // 复制文件到Downloads/video目录（如果启用）
+                            String downloadsPath = null;
+                            if (enableCopyToDownloads) {
+                                downloadsPath = copyToDownloadsVideo(finalFile);
+                                if (downloadsPath != null) {
+                                    Log.i(TAG, "视频已复制到Downloads/video: " + downloadsPath);
+                                    Toast.makeText(activity, "视频已保存到Downloads/video目录", Toast.LENGTH_SHORT).show();
+                                } else {
+                                    Log.w(TAG, "复制到Downloads/video失败，但主文件保存成功");
+                                }
+                            }
+                            
                             try {
                                 JSONObject json = new JSONObject();
                                 json.put("code", 0);
                                 json.put("message", "录制完成");
                                 json.put("absolutePath", finalFile.getAbsolutePath());
+                                
+                                // 添加Downloads/video路径信息
+                                if (downloadsPath != null) {
+                                    json.put("downloadsPath", downloadsPath);
+                                }
 
                                 Log.d(TAG, "录制完成: " + json.toString());
-                                long afterJsonTime = System.currentTimeMillis();
-                                Log.i(TAG, "成功JSON创建耗时 - " + (afterJsonTime - beforeJsonTime) + "ms");
                                 
                                 if (saveFlag) {
-                                    long beforeBridgeTime = System.currentTimeMillis();
                                     JsbBridge.sendToScript("CAMERARECORDERRESULT", json.toString());
-                                    long afterBridgeTime = System.currentTimeMillis();
-                                    Log.i(TAG, "成功JsbBridge发送耗时 - " + (afterBridgeTime - beforeBridgeTime) + "ms");
                                 } else {
                                     Log.i(TAG, "saveFlag为false，跳过JsbBridge发送");
                                 }
@@ -438,59 +387,34 @@ public class CameraXManager {
                                 Log.e(TAG, "创建JSON对象失败", e);
                                 JsbBridge.sendToScript("CAMERARECORDERRESULT", "{\"code\":1,\"error\":\"JSON创建失败\"}");
                             }
-                            
-                            long successEndTime = System.currentTimeMillis();
-                            Log.i(TAG, "成功处理总耗时 - " + (successEndTime - successStartTime) + "ms");
                         }
                         
                         recording = null;
-                        long finalizeEndTime = System.currentTimeMillis();
-                        Log.i(TAG, "录制Finalize事件完成 - " + finalizeEndTime + ", 总耗时: " + (finalizeEndTime - finalizeStartTime) + "ms");
                     }
                 });
     }
 
     public void stopRecording() {
-        long startTime = System.currentTimeMillis();
-        Log.i(TAG, "stopRecording: 开始停止录制 - " + startTime);
+        Log.i(TAG, "stopRecording: 开始停止录制");
         
         if (recording != null) {
-            long beforeStopTime = System.currentTimeMillis();
-            Log.i(TAG, "stopRecording: 调用recording.stop()前 - " + beforeStopTime);
-            
             recording.stop();
-            
-            long afterStopTime = System.currentTimeMillis();
-            Log.i(TAG, "stopRecording: recording.stop()耗时 - " + (afterStopTime - beforeStopTime) + "ms");
-            
             recording = null;
             saveFlag = true;
-            
-            long endTime = System.currentTimeMillis();
-            Log.i(TAG, "stopRecording: 停止录制完成 - " + endTime + ", 总耗时: " + (endTime - startTime) + "ms");
+            Log.i(TAG, "stopRecording: 停止录制完成");
         } else {
             Log.w(TAG, "stopRecording: 当前没有正在录制");
         }
     }
 
     public void stopRecordingWithoutSave() {
-        long startTime = System.currentTimeMillis();
-        Log.i(TAG, "stopRecordingWithoutSave: 开始停止录制(不保存) - " + startTime);
+        Log.i(TAG, "stopRecordingWithoutSave: 开始停止录制(不保存)");
         
         if (recording != null) {
-            long beforeStopTime = System.currentTimeMillis();
-            Log.i(TAG, "stopRecordingWithoutSave: 调用recording.stop()前 - " + beforeStopTime);
-            
             recording.stop();
-            
-            long afterStopTime = System.currentTimeMillis();
-            Log.i(TAG, "stopRecordingWithoutSave: recording.stop()耗时 - " + (afterStopTime - beforeStopTime) + "ms");
-            
             recording = null;
             saveFlag = false;
-            
-            long endTime = System.currentTimeMillis();
-            Log.i(TAG, "stopRecordingWithoutSave: 停止录制完成 - " + endTime + ", 总耗时: " + (endTime - startTime) + "ms");
+            Log.i(TAG, "stopRecordingWithoutSave: 停止录制完成");
         } else {
             Log.w(TAG, "stopRecordingWithoutSave: 当前没有正在录制");
         }
@@ -535,9 +459,26 @@ public class CameraXManager {
     }
 
     /**
-     * 检查预览和录制分辨率同步
+     * 设置是否复制录制文件到Downloads/video目录
+     * @param enable true-启用复制，false-禁用复制
      */
-    private void checkResolutionSync() {
+    public void setEnableCopyToDownloads(boolean enable) {
+        this.enableCopyToDownloads = enable;
+        Log.i(TAG, "复制到Downloads/video功能: " + (enable ? "启用" : "禁用"));
+    }
+
+    /**
+     * 获取是否启用复制到Downloads/video目录
+     * @return true-启用，false-禁用
+     */
+    public boolean isEnableCopyToDownloads() {
+        return enableCopyToDownloads;
+    }
+
+    /**
+     * 异步检查预览和录制分辨率同步（性能优化版本）
+     */
+    private void checkResolutionSyncAsync() {
         try {
             // 避免重复检查
             if (resolutionCheckCompleted) {
@@ -553,34 +494,28 @@ public class CameraXManager {
             // 创建新的Handler实例
             resolutionCheckHandler = new android.os.Handler(android.os.Looper.getMainLooper());
             
-            Log.i(TAG, "=== 分辨率同步检查 ===");
-            
-            // 延迟检查，确保相机完全初始化
+            // 延迟检查，确保相机完全初始化，但不影响启动性能
             resolutionCheckHandler.postDelayed(() -> {
                 try {
                     if (previewView != null && videoCapture != null) {
                         int previewWidth = previewView.getWidth();
                         int previewHeight = previewView.getHeight();
                         
-                        // 减少日志输出，只在有问题时输出详细信息
+                        // 只在分辨率不匹配时输出详细信息
                         if (previewWidth != CAMERA_WIDTH || previewHeight != CAMERA_HEIGHT) {
-                            Log.w(TAG, "预览分辨率: " + previewWidth + "x" + previewHeight + 
-                                  " vs 相机画幅: " + CAMERA_WIDTH + "x" + CAMERA_HEIGHT);
-                            Log.w(TAG, "警告: 预览分辨率与相机画幅不匹配!");
-                            Log.w(TAG, "这可能导致录制视频出现光栅条纹");
+                            Log.w(TAG, "⚠️ 分辨率不匹配: 预览=" + previewWidth + "x" + previewHeight + 
+                                  " vs 相机画幅=" + CAMERA_WIDTH + "x" + CAMERA_HEIGHT);
+                            Log.w(TAG, "这可能导致录制视频出现光栅条纹或解码问题");
                             
                             // 计算分辨率差异
                             int widthDiff = Math.abs(previewWidth - CAMERA_WIDTH);
                             int heightDiff = Math.abs(previewHeight - CAMERA_HEIGHT);
-                            Log.w(TAG, "宽度差异: " + widthDiff + "px, 高度差异: " + heightDiff + "px");
+                            Log.w(TAG, "差异: 宽度=" + widthDiff + "px, 高度=" + heightDiff + "px");
                             
-                            // 尝试自动修复分辨率不匹配问题
-                            attemptResolutionFix(previewWidth, previewHeight);
-                            
-                            // 建议修复方案
+                            // 提供修复建议
                             suggestResolutionFix(previewWidth, previewHeight);
                         } else {
-                            Log.i(TAG, "预览分辨率与相机画幅匹配，分辨率同步正常");
+                            Log.i(TAG, "✅ 分辨率同步正常: " + previewWidth + "x" + previewHeight);
                         }
                         
                         // 标记检查完成
@@ -591,7 +526,7 @@ public class CameraXManager {
                 } catch (Exception e) {
                     Log.e(TAG, "分辨率同步检查失败", e);
                 }
-            }, 2000); // 延迟2秒检查
+            }, 3000); // 延迟3秒，给相机更多初始化时间
             
         } catch (Exception e) {
             Log.e(TAG, "分辨率同步检查异常", e);
@@ -666,50 +601,9 @@ public class CameraXManager {
         }
     }
 
-    /**
-     * 尝试自动修复分辨率不匹配问题
-     */
-    private void attemptResolutionFix(int previewWidth, int previewHeight) {
-        try {
-            Log.i(TAG, "=== 尝试自动修复分辨率 ===");
-            
-            // 检查是否需要调整相机容器尺寸
-            if (cameraContainer != null) {
-                int containerWidth = cameraContainer.getWidth();
-                int containerHeight = cameraContainer.getHeight();
-                
-                Log.i(TAG, "当前容器尺寸: " + containerWidth + "x" + containerHeight);
-                Log.i(TAG, "目标容器尺寸: " + CAMERA_WIDTH + "x" + CAMERA_HEIGHT);
-                
-                // 如果容器尺寸不匹配，尝试调整
-                if (containerWidth != CAMERA_WIDTH || containerHeight != CAMERA_HEIGHT) {
-                    Log.w(TAG, "容器尺寸不匹配，尝试调整...");
-                    
-                    // 这里可以添加动态调整容器尺寸的逻辑
-                    // 但由于容器尺寸通常在布局时确定，这里主要记录信息
-                    Log.w(TAG, "建议在布局时确保容器尺寸为: " + CAMERA_WIDTH + "x" + CAMERA_HEIGHT);
-                }
-            }
-            
-            // 检查预览视图的缩放设置
-            if (previewView != null) {
-                Log.i(TAG, "预览视图缩放类型: " + previewView.getScaleType());
-                
-                // 如果缩放类型可能导致分辨率问题，建议调整
-                if (previewView.getScaleType() != PreviewView.ScaleType.FILL_CENTER) {
-                    Log.w(TAG, "建议将预览视图缩放类型设置为FILL_CENTER");
-                }
-            }
-            
-            Log.i(TAG, "自动修复尝试完成");
-            
-        } catch (Exception e) {
-            Log.e(TAG, "自动修复分辨率失败", e);
-        }
-    }
 
     /**
-     * 建议分辨率修复方案
+     * 建议分辨率修复方案（优化版本）
      */
     private void suggestResolutionFix(int previewWidth, int previewHeight) {
         try {
@@ -726,13 +620,13 @@ public class CameraXManager {
                 float previewRatio = (float) previewWidth / previewHeight;
                 float cameraRatio = (float) CAMERA_WIDTH / CAMERA_HEIGHT;
                 
-                Log.i(TAG, "预览宽高比: " + previewRatio);
-                Log.i(TAG, "相机画幅宽高比: " + cameraRatio);
+                Log.i(TAG, "预览宽高比: " + String.format("%.3f", previewRatio));
+                Log.i(TAG, "相机画幅宽高比: " + String.format("%.3f", cameraRatio));
                 
                 if (Math.abs(previewRatio - cameraRatio) > 0.1f) {
-                    Log.w(TAG, "宽高比不匹配，建议调整相机画幅常量:");
-                    Log.w(TAG, "当前相机画幅: " + CAMERA_WIDTH + "x" + CAMERA_HEIGHT);
-                    Log.w(TAG, "建议相机画幅: " + previewWidth + "x" + previewHeight);
+                    Log.w(TAG, "⚠️ 宽高比不匹配，建议调整相机画幅常量:");
+                    Log.w(TAG, "当前: " + CAMERA_WIDTH + "x" + CAMERA_HEIGHT);
+                    Log.w(TAG, "建议: " + previewWidth + "x" + previewHeight);
                 }
             }
             
@@ -743,135 +637,6 @@ public class CameraXManager {
         }
     }
 
-    /**
-     * 诊断光栅问题
-     */
-    private void diagnoseRasterIssues() {
-        try {
-            Log.i(TAG, "=== 光栅问题诊断开始 ===");
-            
-            // 记录设备基本信息
-            android.util.DisplayMetrics metrics = activity.getResources().getDisplayMetrics();
-            Log.i(TAG, "设备型号: " + android.os.Build.MODEL);
-            Log.i(TAG, "Android版本: " + android.os.Build.VERSION.RELEASE);
-            Log.i(TAG, "屏幕尺寸: " + metrics.widthPixels + "x" + metrics.heightPixels);
-            Log.i(TAG, "屏幕密度: " + metrics.densityDpi + " DPI");
-            
-            // 记录相机画幅配置
-            Log.i(TAG, "设计分辨率: " + DESIGN_WIDTH + "x" + DESIGN_HEIGHT);
-            Log.i(TAG, "相机画幅: " + CAMERA_WIDTH + "x" + CAMERA_HEIGHT);
-            Log.i(TAG, "相机画幅比例: " + CAMERA_ASPECT_RATIO);
-            
-            // 延迟检查预览和录制配置
-            new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(() -> {
-                checkPreviewRecordingAlignment();
-            }, 2000); // 延迟2秒确保相机完全初始化
-            
-        } catch (Exception e) {
-            Log.e(TAG, "光栅问题诊断失败", e);
-        }
-    }
-    
-    /**
-     * 检查预览和录制对齐情况
-     */
-    private void checkPreviewRecordingAlignment() {
-        try {
-            Log.i(TAG, "=== 预览录制对齐检查 ===");
-            
-            if (previewView != null) {
-                int previewWidth = previewView.getWidth();
-                int previewHeight = previewView.getHeight();
-                Log.i(TAG, "预览视图尺寸: " + previewWidth + "x" + previewHeight);
-                
-                // 检查预览尺寸是否与相机画幅匹配
-                if (previewWidth != CAMERA_WIDTH || previewHeight != CAMERA_HEIGHT) {
-                    Log.w(TAG, "警告: 预览尺寸与相机画幅不匹配!");
-                    Log.w(TAG, "预览: " + previewWidth + "x" + previewHeight + " vs 相机画幅: " + CAMERA_WIDTH + "x" + CAMERA_HEIGHT);
-                    
-                    // 计算缩放比例
-                    float scaleX = (float) previewWidth / CAMERA_WIDTH;
-                    float scaleY = (float) previewHeight / CAMERA_HEIGHT;
-                    Log.w(TAG, "缩放比例: X=" + scaleX + ", Y=" + scaleY);
-                    
-                    if (Math.abs(scaleX - scaleY) > 0.05f) {
-                        Log.e(TAG, "严重警告: 缩放比例不匹配，这可能导致光栅条纹!");
-                    }
-                } else {
-                    Log.i(TAG, "预览尺寸与相机画幅匹配");
-                }
-            }
-            
-            if (cameraContainer != null) {
-                int containerWidth = cameraContainer.getWidth();
-                int containerHeight = cameraContainer.getHeight();
-                Log.i(TAG, "相机容器尺寸: " + containerWidth + "x" + containerHeight);
-                
-                // 检查容器尺寸
-                if (containerWidth != CAMERA_WIDTH || containerHeight != CAMERA_HEIGHT) {
-                    Log.w(TAG, "警告: 容器尺寸与相机画幅不匹配!");
-                    Log.w(TAG, "容器: " + containerWidth + "x" + containerHeight + " vs 相机画幅: " + CAMERA_WIDTH + "x" + CAMERA_HEIGHT);
-                }
-            }
-            
-            // 检查录制器配置
-            if (videoCapture != null) {
-                Log.i(TAG, "录制器已配置");
-            } else {
-                Log.e(TAG, "录制器未配置，这可能导致录制问题");
-            }
-            
-            Log.i(TAG, "========================");
-            
-        } catch (Exception e) {
-            Log.e(TAG, "预览录制对齐检查失败", e);
-        }
-    }
-
-    
-    /**
-     * 记录编码器信息
-     */
-    private void logEncoderInfo() {
-        try {
-            Log.i(TAG, "=== 编码器信息 ===");
-            
-            // 记录设备硬件信息
-            Log.i(TAG, "CPU架构: " + android.os.Build.CPU_ABI);
-            Log.i(TAG, "硬件: " + android.os.Build.HARDWARE);
-            Log.i(TAG, "制造商: " + android.os.Build.MANUFACTURER);
-            
-            // 记录Android版本信息
-            int apiLevel = android.os.Build.VERSION.SDK_INT;
-            Log.i(TAG, "API级别: " + apiLevel);
-            
-            // 检查是否支持硬件编码
-            boolean supportsHardwareEncoding = apiLevel >= 21; // Android 5.0+
-            Log.i(TAG, "支持硬件编码: " + supportsHardwareEncoding);
-            
-            // 记录内存信息
-            Runtime runtime = Runtime.getRuntime();
-            long maxMemory = runtime.maxMemory();
-            long totalMemory = runtime.totalMemory();
-            long freeMemory = runtime.freeMemory();
-            
-            Log.i(TAG, "最大内存: " + (maxMemory / 1024 / 1024) + "MB");
-            Log.i(TAG, "总内存: " + (totalMemory / 1024 / 1024) + "MB");
-            Log.i(TAG, "可用内存: " + (freeMemory / 1024 / 1024) + "MB");
-            
-            // 检查录制质量设置
-            if (videoCapture != null) {
-                Log.i(TAG, "录制器配置: 已配置");
-            } else {
-                Log.e(TAG, "录制器配置: 未配置");
-            }
-            
-            Log.i(TAG, "================");
-            
-        } catch (Exception e) {
-            Log.e(TAG, "记录编码器信息失败", e);
-        }
-    }
 
 
     /**
@@ -913,9 +678,6 @@ public class CameraXManager {
      * @return 可用的存储目录，如果都不可用则返回null
      */
     private File getStorageDirectory() {
-        long startTime = System.currentTimeMillis();
-        Log.i(TAG, "getStorageDirectory: 开始获取存储目录 - " + startTime);
-        
         // 尝试多个存储路径，按优先级排序
         File[] candidates = {
             // 1. 应用私有目录（推荐，无需权限）
@@ -930,39 +692,21 @@ public class CameraXManager {
             new File(Environment.getExternalStorageDirectory(), "CameraRecords")
         };
         
-        for (int i = 0; i < candidates.length; i++) {
-            File dir = candidates[i];
-            long candidateStartTime = System.currentTimeMillis();
-            Log.i(TAG, "getStorageDirectory: 测试存储目录 " + (i + 1) + "/" + candidates.length + " - " + dir.getAbsolutePath());
-            
+        for (File dir : candidates) {
             try {
-                Log.d(TAG, "尝试存储目录: " + dir.getAbsolutePath());
-                
                 // 检查目录是否存在，不存在则创建
-                long beforeExistsCheck = System.currentTimeMillis();
                 if (!dir.exists()) {
-                    long beforeMkdirs = System.currentTimeMillis();
-                    boolean created = dir.mkdirs();
-                    long afterMkdirs = System.currentTimeMillis();
-                    Log.d(TAG, "创建目录 " + dir.getAbsolutePath() + " 结果: " + created + ", 耗时: " + (afterMkdirs - beforeMkdirs) + "ms");
-                    if (!created) {
+                    if (!dir.mkdirs()) {
                         continue; // 尝试下一个目录
                     }
                 }
-                long afterExistsCheck = System.currentTimeMillis();
-                Log.i(TAG, "目录存在检查耗时: " + (afterExistsCheck - beforeExistsCheck) + "ms");
                 
                 // 检查是否可写
-                long beforeWriteCheck = System.currentTimeMillis();
                 if (!dir.canWrite()) {
-                    Log.w(TAG, "目录不可写: " + dir.getAbsolutePath());
                     continue;
                 }
-                long afterWriteCheck = System.currentTimeMillis();
-                Log.i(TAG, "目录写入权限检查耗时: " + (afterWriteCheck - beforeWriteCheck) + "ms");
                 
                 // 测试写入权限
-                long beforeTestFile = System.currentTimeMillis();
                 File testFile = new File(dir, "test_write.tmp");
                 if (testFile.exists()) {
                     testFile.delete();
@@ -970,12 +714,7 @@ public class CameraXManager {
                 
                 if (testFile.createNewFile()) {
                     testFile.delete();
-                    long afterTestFile = System.currentTimeMillis();
-                    Log.i(TAG, "测试文件创建耗时: " + (afterTestFile - beforeTestFile) + "ms");
                     Log.i(TAG, "使用存储目录: " + dir.getAbsolutePath());
-                    
-                    long endTime = System.currentTimeMillis();
-                    Log.i(TAG, "getStorageDirectory: 成功获取存储目录 - " + endTime + ", 总耗时: " + (endTime - startTime) + "ms");
                     return dir;
                 }
                 
@@ -983,13 +722,81 @@ public class CameraXManager {
                 Log.w(TAG, "测试目录失败: " + dir.getAbsolutePath() + ", 错误: " + e.getMessage());
                 continue;
             }
-            
-            long candidateEndTime = System.currentTimeMillis();
-            Log.i(TAG, "存储目录 " + (i + 1) + " 测试总耗时: " + (candidateEndTime - candidateStartTime) + "ms");
         }
         
-        long endTime = System.currentTimeMillis();
-        Log.e(TAG, "所有存储目录都不可用，总耗时: " + (endTime - startTime) + "ms");
+        Log.e(TAG, "所有存储目录都不可用");
         return null;
+    }
+
+    /**
+     * 复制文件到Downloads/video目录
+     * @param sourceFile 源文件
+     * @return 复制后的文件路径，如果复制失败返回null
+     */
+    private String copyToDownloadsVideo(File sourceFile) {
+        try {
+            // 创建Downloads/video目录
+            File downloadsVideoDir = new File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "video");
+            if (!downloadsVideoDir.exists()) {
+                boolean created = downloadsVideoDir.mkdirs();
+                if (!created) {
+                    Log.w(TAG, "无法创建Downloads/video目录");
+                    return null;
+                }
+            }
+            
+            // 检查目录是否可写
+            if (!downloadsVideoDir.canWrite()) {
+                Log.w(TAG, "Downloads/video目录不可写");
+                return null;
+            }
+            
+            // 创建目标文件
+            File destFile = new File(downloadsVideoDir, sourceFile.getName());
+            
+            // 如果目标文件已存在，添加时间戳后缀
+            if (destFile.exists()) {
+                String nameWithoutExt = sourceFile.getName().substring(0, sourceFile.getName().lastIndexOf('.'));
+                String ext = sourceFile.getName().substring(sourceFile.getName().lastIndexOf('.'));
+                String timeStamp = new SimpleDateFormat("_HHmmss", Locale.getDefault()).format(new Date());
+                destFile = new File(downloadsVideoDir, nameWithoutExt + timeStamp + ext);
+            }
+            
+            Log.i(TAG, "开始复制文件到Downloads/video: " + destFile.getAbsolutePath());
+            
+            // 使用FileChannel进行高效复制
+            try (FileInputStream fis = new FileInputStream(sourceFile);
+                 FileOutputStream fos = new FileOutputStream(destFile);
+                 FileChannel sourceChannel = fis.getChannel();
+                 FileChannel destChannel = fos.getChannel()) {
+                
+                long transferred = 0;
+                long size = sourceChannel.size();
+                
+                while (transferred < size) {
+                    long count = sourceChannel.transferTo(transferred, size - transferred, destChannel);
+                    if (count == 0) {
+                        throw new IOException("文件复制中断");
+                    }
+                    transferred += count;
+                }
+                
+                Log.i(TAG, "文件复制完成: " + destFile.getAbsolutePath() + ", 大小: " + destFile.length() + " bytes");
+                
+                // 通知媒体扫描器
+                MediaScannerConnection.scanFile(
+                    activity,
+                    new String[]{destFile.getAbsolutePath()},
+                    new String[]{"video/mp4"},
+                    null
+                );
+                
+                return destFile.getAbsolutePath();
+            }
+            
+        } catch (IOException e) {
+            Log.e(TAG, "复制文件到Downloads/video失败", e);
+            return null;
+        }
     }
 }
