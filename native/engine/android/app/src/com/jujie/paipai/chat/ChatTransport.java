@@ -1,5 +1,7 @@
 package com.jujie.paipai.chat;
 
+import android.util.Log;
+
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
@@ -40,6 +42,17 @@ public class ChatTransport {
     private volatile boolean manualClose = false;
     private volatile boolean autoReconnect = true;
     private volatile boolean reconnectOnNormalClose = true;
+
+    private boolean enableAsr = true;
+
+    public void setEnableAsr(boolean enableAsr) {
+        this.enableAsr = enableAsr;
+    }
+
+    public boolean isEnableAsr() {
+        return enableAsr;
+    }
+
     private volatile @Nullable String lastUrl = null;
 
     private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor(r -> {
@@ -109,7 +122,17 @@ public class ChatTransport {
             if (connecting) return; // 防止并发重复连接
             connecting = true;
         }
-        Request req = new Request.Builder().url(url).build();
+
+        // 根据 enableAsr 标志修改 URL 参数
+        Request req =null;
+        if(this.enableAsr){
+            req = new Request.Builder().url(url + "&enableAsr=1").build();
+        }else{
+            req = new Request.Builder().url(url).build();
+        }
+
+        Log.d("ChatTransport", "Opening WebSocket to " + req.url());
+
         ws = http.newWebSocket(req, new WebSocketListener() {
             @Override public void onOpen(@NonNull WebSocket webSocket, @NonNull Response response) {
                 isConnected = true;

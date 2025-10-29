@@ -167,6 +167,27 @@ public final class CocosChatListener implements VoiceChatClient.Listener {
     }
 
     @Override
+    public void onModeSwitched(@NonNull String mode, @NonNull JSONObject params) {
+//        if(mode.equals("chat")){
+//            sendToCocos("CHAT:MODE:", new JSONObject());
+//        }
+        sendToCocos("CHAT:MODE:SWITCHED", params);
+    }
+
+    public void onSongStart(@NonNull String songName) {
+        sendToCocos("CHAT:SONG:STARTED", jPair("songName", songName));
+    }
+
+    @Override
+    public void onSongStop() {
+        sendToCocos("CHAT:SONG:PAUSED", new JSONObject());
+    }
+
+    public void onSongResume(){
+        sendToCocos("CHAT:SONG:RESUMED", new JSONObject());
+    }
+
+    @Override
     public void onAssistantFinal(@NonNull String text) {
         sendToCocos("CHAT:ASSISTANT:FINAL", jText(text));
     }

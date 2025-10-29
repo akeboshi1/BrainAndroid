@@ -52,6 +52,8 @@ public class ChatTtsPlayer {
     private final Deque<Track> queue = new ArrayDeque<>();
     private @Nullable String currentPlayingMeta = null; // requestId#sequence
     private final Callback callback;
+    // 新增：暂停状态标志，防止暂停时自动开播
+    private volatile boolean paused = false;
 
     @UnstableApi
     public ChatTtsPlayer(@NonNull Context app, @NonNull Callback cb) {
@@ -142,6 +144,26 @@ public class ChatTtsPlayer {
         });
     }
 
+    // 新增：暂停/恢复控制
+    public void pause() {
+        runOnPlayer(() -> {
+            paused = true;
+            try { player.pause(); } catch (Exception ignored) {}
+        });
+    }
+
+    public void resume() {
+        runOnPlayer(() -> {
+            paused = false;
+            // 若已有当前播放项，仅恢复；否则尝试装载下一项
+            if (currentPlayingMeta != null) {
+                try { player.play(); } catch (Exception ignored) {}
+            } else {
+                playNextIfIdle();
+            }
+        });
+    }
+
     private void notifyStartIfNeeded(){
         if (Looper.myLooper() != playerLooper) { runOnPlayer(this::notifyStartIfNeeded); return; }
         Track cur = queue.peekFirst();
@@ -162,6 +184,8 @@ public class ChatTtsPlayer {
 
     private void playNextIfIdle(){
         if (Looper.myLooper() != playerLooper) { runOnPlayer(this::playNextIfIdle); return; }
+        // 若处于暂停状态，则不自动开始
+        if (paused) return;
         if (player.isPlaying()) return;
         Track next = queue.peekFirst();
         if (next == null) { currentPlayingMeta = null; return; }

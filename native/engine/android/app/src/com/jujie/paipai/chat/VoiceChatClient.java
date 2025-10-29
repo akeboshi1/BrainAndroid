@@ -7,6 +7,7 @@ import android.media.AudioDeviceInfo;
 import android.media.AudioManager;
 import android.os.Build;
 import android.os.SystemClock;
+import android.util.Log;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
@@ -24,7 +25,7 @@ import java.util.Collections;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * 聊天客户端：管理连接、录音、文本增量、TTS 播放与随播。
+ * 聊天客户端：管理连接、录音、文本增量、TTS 播放与随播，以及歌曲播放。
  */
 public class VoiceChatClient {
 
@@ -38,7 +39,16 @@ public class VoiceChatClient {
         void onAssistantDelta(@NonNull String text);
         void onRecordingReady();
         void onRecordingStopped();
+
+        void onModeSwitched(@NonNull String mode, JSONObject params);
+        // 新增：歌曲事件回调（默认空实现，避免破坏兼容）
+         void onSongStart(@NonNull String name) ;
+         void onSongStop() ;
+         void onSongResume() ;
     }
+
+    // 新增：客户端模式
+    private enum Mode { CHAT, SONG }
 
     private final Context app;
     private final Listener listener;
@@ -46,10 +56,13 @@ public class VoiceChatClient {
     private final AudioManager audioManager;
     private boolean commModeApplied = false;
 
+    private boolean enableAsr = true;
+
     private final ChatTransport transport;
 
     private boolean isConnected = false;
     private boolean isReady = false;
+    private boolean isMicReady = false;
 
     private final ChatTtsPlayer ttsPlayer;
     private @Nullable MicRecorder micRecorder;
@@ -77,11 +90,20 @@ public class VoiceChatClient {
 
     private final Set<String> finalizedResponses = Collections.newSetFromMap(new ConcurrentHashMap<>());
 
+    // 新增：歌曲相关状态
+    private Mode mode = Mode.CHAT;
+    private @Nullable String currentSongId = null;
+    private @Nullable String currentSongName = null;
+    private int currentSongSeq = 0;
+    private boolean songPaused = false;
+
     @UnstableApi
     public VoiceChatClient(@NonNull Context context, @NonNull Listener l) {
         this.app = context.getApplicationContext();
         this.listener = l;
         this.audioManager = (AudioManager) app.getSystemService(Context.AUDIO_SERVICE);
+        // 增加一个麦克风状态
+        this.isMicReady = false;
 
         this.ttsPlayer = new ChatTtsPlayer(app, new ChatTtsPlayer.Callback() {
             @Override
@@ -147,10 +169,16 @@ public class VoiceChatClient {
         stopRecording();
         clearTtsQueue();
         resetConversation();
+        // 退出时重置歌曲状态
+        stopSongPlayback(true);
         transport.close();
         isConnected=false; isReady=false;
         applyCommunicationAudioMode(false);
         listener.onConnectionClosed();
+    }
+
+    public void setEnableAsr(boolean enable){
+        this.enableAsr = enable;
     }
 
     private void handleJsonMessage(String raw){
@@ -276,6 +304,12 @@ public class VoiceChatClient {
     }
 
     private void handleBinary(byte[] bytes){
+        // 新增：歌曲模式下直接处理歌曲流
+        if (mode == Mode.SONG) {
+            handleSongBinary(bytes);
+            return;
+        }
+
         TtsStreamJob job = activeStreamJob;
         if (job != null && isActiveResponse(job.requestId)) {
             if (!firstAudioReported.contains(job.requestId)) {
@@ -356,6 +390,8 @@ public class VoiceChatClient {
         if (ok) {
             log("开始录音 16kHz PCM16");
             listener.onRecordingReady();
+            this.enableAsr = true;
+            this.transport.setEnableAsr(true);
             // 启动asr
             transport.sendText("{\"type\":\"start_asr\"}");
         }
@@ -367,6 +403,8 @@ public class VoiceChatClient {
         }
         applyCommunicationAudioMode(false);
         log("停止录音");
+//        this.enableAsr = false;
+        this.transport.setEnableAsr(false);
         listener.onRecordingStopped();
     }
 
@@ -439,6 +477,8 @@ public class VoiceChatClient {
         ttsManagedResponses.clear();
         playbackDisplayedIndex.clear();
         finalizedResponses.clear();
+        // 重置模式
+        mode = Mode.CHAT;
     }
 
     private void log(String s){ listener.onLog(s); }
@@ -459,6 +499,10 @@ public class VoiceChatClient {
         disconnect();
     }
 
+    public void playSong(@Nullable String songId, @NonNull String name) {
+        switchToSong(songId, name);
+    }
+
     private static <K, V> V getOrDefaultCompat(Map<K, V> map, K key, V def) {
         V v = map.get(key);
         return v != null ? v : def;
@@ -471,5 +515,103 @@ public class VoiceChatClient {
             map.put(key, sb);
         }
         return sb;
+    }
+
+    // ====== 歌曲相关：模式切换与数据处理 ======
+    public void switchMode(@NonNull String modeStr, JSONObject params) {
+        if (modeStr.equalsIgnoreCase("chat")) {
+            switchToChat();
+            try { listener.onModeSwitched(modeStr.toLowerCase(), params); } catch (Exception ignored) {}
+        } else if (modeStr.equalsIgnoreCase("song")) {
+            String songName = params.optString("songName", "未知歌曲");
+            switchToSong(null, songName);
+            try { listener.onModeSwitched(modeStr.toLowerCase(), params); } catch (Exception ignored) {}
+        }
+    }
+
+    private void switchToSong(@Nullable String responseId, @NonNull String name) {
+        // 停止录音与清空所有音频（语音/歌曲）
+        stopRecording();
+        clearTtsQueue();
+
+        this.transport.sendText("{\"type\":\"song\", \"song_name\":\""+name+"\"}");
+
+        // 取消当前 TTS 响应（如有）
+        if (activeResponseId != null) {
+            try { cancelTtsForResponse(activeResponseId); } catch (Exception ignored) {}
+            activeResponseId = null;
+        }
+        // 切歌时重置歌曲状态
+        currentSongId = responseId != null ? responseId : ("song-" + SystemClock.elapsedRealtime());
+        currentSongName = name;
+        currentSongSeq = 0;
+        songPaused = false;
+        mode = Mode.SONG;
+        log("播放歌曲: " + name + " id=" + currentSongId);
+        try { listener.onSongStart(name); } catch (Exception ignored) {}
+    }
+
+    public void pauseSong() {
+        if (mode != Mode.SONG) return;
+        if (!songPaused) {
+            songPaused = true;
+            // 仅暂停播放器，不清队列，不缓存流
+            try { ttsPlayer.pause(); } catch (Exception ignored) {}
+            try { listener.onSongStop(); } catch (Exception ignored) {}
+            log("歌曲暂停");
+        }
+    }
+
+    public void resumeSong() {
+        Log.d("VoiceChatClient", "resumeSong called mode: " + mode + " songPaused: " + songPaused + " currentSongId: " + currentSongId);
+
+        if (mode != Mode.SONG) return;
+        if (songPaused) {
+            songPaused = false;
+            // 恢复播放器继续播放
+            try { ttsPlayer.resume(); } catch (Exception ignored) {}
+            try { listener.onSongResume(); } catch (Exception ignored) {}
+            log("歌曲继续");
+        }
+    }
+
+    public void switchToChat() {
+        if (mode == Mode.SONG) {
+            // 停止之前歌曲播放
+            stopSongPlayback(false);
+            mode = Mode.CHAT;
+            this.transport.sendText("{\"type\":\"chat\"}");
+
+            log("切回聊天");
+            Log.d("VoiceChatClient", "switchToChat called enableAsr: " + enableAsr + " isConnected: " + isConnected + " isReady: " + isReady);
+            // 回到聊天后，根据 enableAsr 决定是否开始录音
+            if (enableAsr && isConnected && isReady) {
+                startRecording();
+            }
+        }
+    }
+
+    private void handleSongBinary(@NonNull byte[] bytes) {
+        if (currentSongId == null) {
+            // 异常：未收到 play_song 但来了二进制，兜底创建一个歌曲会话
+            currentSongId = "song-" + SystemClock.elapsedRealtime();
+            currentSongName = "";
+            currentSongSeq = 0;
+            songPaused = false;
+        }
+        // 无论是否暂停，都将音频入队；暂停状态下播放器不会自动开始
+        enqueueTts(currentSongId, currentSongSeq++, bytes, "", false);
+    }
+
+    private void stopSongPlayback(boolean resetState) {
+        try { ttsPlayer.cancelForResponse(currentSongId != null ? currentSongId : ""); } catch (Exception ignored) {}
+        try { ttsPlayer.clear(); } catch (Exception ignored) {}
+        if (resetState) {
+            currentSongId = null;
+            currentSongName = null;
+            currentSongSeq = 0;
+            songPaused = false;
+            mode = Mode.CHAT;
+        }
     }
 }
