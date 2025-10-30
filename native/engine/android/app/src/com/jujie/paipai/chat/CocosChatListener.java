@@ -188,6 +188,11 @@ public final class CocosChatListener implements VoiceChatClient.Listener {
     }
 
     @Override
+    public void onSongEnd(@NonNull String name) {
+        sendToCocos("CHAT:SONG:END", jPair("songName", name));
+    }
+
+    @Override
     public void onAssistantFinal(@NonNull String text) {
         sendToCocos("CHAT:ASSISTANT:FINAL", jText(text));
     }

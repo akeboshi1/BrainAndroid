@@ -16,8 +16,11 @@ import androidx.media3.common.util.UnstableApi;
 
 import org.json.JSONObject;
 
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -45,6 +48,7 @@ public class VoiceChatClient {
          void onSongStart(@NonNull String name) ;
          void onSongStop() ;
          void onSongResume() ;
+         void onSongEnd(@NonNull String name) ;
     }
 
     // 新增：客户端模式
@@ -96,6 +100,12 @@ public class VoiceChatClient {
     private @Nullable String currentSongName = null;
     private int currentSongSeq = 0;
     private boolean songPaused = false;
+    private final Set<String> processedSongChunks = Collections.newSetFromMap(new ConcurrentHashMap<>());
+
+    // 添加缓冲区
+    private final Map<String, ByteArrayOutputStream> songBuffers = new ConcurrentHashMap<>();
+    private static final int SONG_BUFFER_THRESHOLD = 32 * 1024 * 32; // 32KB
+
 
     @UnstableApi
     public VoiceChatClient(@NonNull Context context, @NonNull Listener l) {
@@ -127,6 +137,36 @@ public class VoiceChatClient {
                     ttsManagedResponses.remove(requestId);
                     playbackDisplayedIndex.remove(requestId);
                 }
+            }
+
+            @Override
+            public void onQueueIdle() {
+                if (mode == Mode.SONG) {
+                    log("歌曲播放完成，音频队列已空");
+//                    try { listener.onSongEnd(currentSongName); } catch (Exception ignored) {}
+
+                    // 仅停止继续播放，不切回聊天；如需切回聊天可改为：
+                    // stopSongPlayback(true); // true 表示重置并切回 Mode.CHAT
+                    // 这里我们选择“留在 SONG 模式等待下一首或用户操作”
+                }
+            }
+
+            @Override
+            public void onSongEndMarker(@NonNull String requestId) {
+                Log.d("VoiceChatClient", "onSongEndMarker: currentSongId=" + currentSongId +
+                        ", currentSongName=" + currentSongName + ", requestId=" + requestId +
+                        ", mode=" + mode);
+
+                if (mode == Mode.SONG && requestId.equals(currentSongId)) {
+                    log("收到歌曲结束标记，触发歌曲结束事件: " + currentSongName);
+                    Log.d("VoiceChatClient","----------------------------------------->"+currentSongName);
+                    try {
+                        listener.onSongEnd(currentSongName != null ? currentSongName : "未知歌曲");
+                    } catch (Exception ignored) {}
+                    // 注意：这里我们不清除歌曲状态，因为可能还需要在onSongComplete中处理，或者由外部切换模式
+                    // 我们只是通知歌曲完成，但不自动切换模式，由调用者决定后续行为
+                }
+
             }
         });
 
@@ -296,6 +336,23 @@ public class VoiceChatClient {
                         log("tts_cancel r="+responseId);
                     }
                     break;
+                }
+                case "song_end": {
+                    if (mode == Mode.SONG && currentSongId != null) {
+                        log("收到歌曲结束信号: " + currentSongName);
+                        // 清空缓冲区
+                        flushSongBuffer(currentSongId);
+                        // 在队列中添加结束标识
+                        enqueueTts(currentSongId, currentSongSeq++, new byte[0], "", true);
+                    }
+                    break;
+
+//                    if (mode == Mode.SONG && currentSongId != null) {
+//                        log("收到歌曲结束信号: " + currentSongName);
+//                        // 在队列中添加结束标识
+//                        enqueueTts(currentSongId, currentSongSeq++, new byte[0], "", true);
+//                    }
+//                    break;
                 }
                 default:
                     log("事件: "+type);
@@ -530,11 +587,18 @@ public class VoiceChatClient {
     }
 
     private void switchToSong(@Nullable String responseId, @NonNull String name) {
+        Log.d("VoiceChatClient", "switchToSong: 开始设置歌曲状态, name=" + name);
+
+        currentSongId = "song-" + SystemClock.elapsedRealtime();
+
+        // 在开始新歌曲时清空去重集合
+        processedSongChunks.clear();
+
         // 停止录音与清空所有音频（语音/歌曲）
         stopRecording();
         clearTtsQueue();
 
-        this.transport.sendText("{\"type\":\"song\", \"song_name\":\""+name+"\"}");
+        this.transport.sendText("{\"type\":\"song\", \"songName\":\""+name+"\"}");
 
         // 取消当前 TTS 响应（如有）
         if (activeResponseId != null) {
@@ -542,12 +606,14 @@ public class VoiceChatClient {
             activeResponseId = null;
         }
         // 切歌时重置歌曲状态
-        currentSongId = responseId != null ? responseId : ("song-" + SystemClock.elapsedRealtime());
+//        currentSongId = responseId != null ? responseId : ("song-" + SystemClock.elapsedRealtime());
         currentSongName = name;
         currentSongSeq = 0;
         songPaused = false;
         mode = Mode.SONG;
         log("播放歌曲: " + name + " id=" + currentSongId);
+        Log.d("VoiceChatClient", "播放歌曲: " + name + " id=" + currentSongId);
+
         try { listener.onSongStart(name); } catch (Exception ignored) {}
     }
 
@@ -599,8 +665,52 @@ public class VoiceChatClient {
             currentSongSeq = 0;
             songPaused = false;
         }
-        // 无论是否暂停，都将音频入队；暂停状态下播放器不会自动开始
-        enqueueTts(currentSongId, currentSongSeq++, bytes, "", false);
+        // 生成数据块的唯一标识（使用序列号和数据的简单哈希）
+//        String chunkKey = currentSongId + "#" + currentSongSeq + "-" + Arrays.hashCode(bytes);
+        String chunkKey = currentSongId + "-" + Arrays.hashCode(bytes);
+
+
+        // 检查是否已处理过这个数据块
+        if (!processedSongChunks.add(chunkKey)) {
+            Log.w("VoiceChatClient", "检测到重复的歌曲数据块，跳过: " + chunkKey);
+            return;
+        }
+
+//        Log.d("VoiceChatClient", "handleSongBinary: 收到歌曲二进制数据，长度=" + bytes.length +
+//                ", 当前序列号=" + currentSongSeq + ", 当前歌曲ID=" + currentSongId +
+//                ", 哈希=" + Arrays.hashCode(bytes));
+//
+//
+//        // 无论是否暂停，都将音频入队；暂停状态下播放器不会自动开始
+//        enqueueTts(currentSongId, currentSongSeq++, bytes, "", false);
+        // 获取或创建缓冲区
+        ByteArrayOutputStream buffer = songBuffers.get(currentSongId);
+        if (buffer == null) {
+            buffer = new ByteArrayOutputStream();
+            songBuffers.put(currentSongId, buffer);
+        }
+
+        try {
+            buffer.write(bytes);
+
+            // 当缓冲区达到阈值时发送
+            if (buffer.size() >= SONG_BUFFER_THRESHOLD) {
+                byte[] mergedData = buffer.toByteArray();
+                enqueueTts(currentSongId, currentSongSeq++, mergedData, "", false);
+                buffer.reset(); // 清空缓冲区
+            }
+        } catch (IOException e) {
+            Log.e("VoiceChatClient", "歌曲缓冲区写入失败", e);
+        }
+
+    }
+    // 在歌曲结束时清空缓冲区
+    private void flushSongBuffer(String songId) {
+        ByteArrayOutputStream buffer = songBuffers.remove(songId);
+        if (buffer != null && buffer.size() > 0) {
+            byte[] remainingData = buffer.toByteArray();
+            enqueueTts(songId, currentSongSeq++, remainingData, "", false);
+        }
     }
 
     private void stopSongPlayback(boolean resetState) {
