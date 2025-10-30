@@ -85,7 +85,7 @@ public class BridgeCallback implements JsbBridge.ICallback {
                     VoiceChatClient.Listener listener = new CocosChatListener();
                     chatClient = new VoiceChatClient(this.activity, listener);
                 }
-                String url = "wss://test.paipai.xinjiaxianglao.com/chat/voice-chat?token="+token+"&userNickName="+userNickName; // 默认测试环境
+                String url = "wss://colapai.xinjiaxianglao.com/chat/voice-chat?token="+token+"&userNickName="+userNickName; // 默认测试环境
 //                String versionName = DeviceInfo.VERSION_NAME;
 //                if(!versionName.toLowerCase().endsWith("test")){
 //                    url = "wss://colapai.xinjiaxianglao.com/chat/voice-chat?token="+token; // 生产环境
@@ -117,10 +117,48 @@ public class BridgeCallback implements JsbBridge.ICallback {
 
         if (arg0.equals("CHAT:RECORDING:STOP")) {
             if(chatClient != null){
+                chatClient.setEnableAsr(false); // 客户端关闭
                 chatClient.stopRecording();
             } else {
                 Log.e("BridgeCallback", "Chat client is not initialized");
                 JsbBridge.sendToScript("CHAT:RECORDING:ERROR", "Chat client is not initialized");
+            }
+            return;
+        }
+
+        if (arg0.equals("CHAT:MODE:SWITCH") ) {
+            try {
+                JSONObject jsonObject = new JSONObject(arg1);
+                String mode = jsonObject.optString("mode");
+                String songName = jsonObject.optString("songName");
+                if (chatClient != null) {
+                    chatClient.switchMode(mode, jsonObject);
+                } else {
+                    Log.e("BridgeCallback", "Chat client is not initialized");
+                    JsbBridge.sendToScript("CHAT:MODE:ERROR", "Chat client is not initialized");
+                }
+            }catch (JSONException e) {
+                Log.e("BridgeCallback", "JSON error", e);
+            }
+            return;
+        }
+
+        if (arg0.equals("CHAT:SONG:PAUSE")) {
+            if (chatClient != null) {
+                chatClient.pauseSong();
+            } else {
+                Log.e("BridgeCallback", "Chat client is not initialized");
+                JsbBridge.sendToScript("CHAT:SONG:ERROR", "Chat client is not initialized");
+            }
+            return;
+        }
+
+        if (arg0.equals("CHAT:SONG:RESUME")) {
+            if (chatClient != null) {
+                chatClient.resumeSong();
+            } else {
+                Log.e("BridgeCallback", "Chat client is not initialized");
+                JsbBridge.sendToScript("CHAT:SONG:ERROR", "Chat client is not initialized");
             }
             return;
         }
