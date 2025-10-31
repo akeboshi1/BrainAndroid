@@ -8,6 +8,7 @@ import androidx.annotation.NonNull;
 
 import com.cocos.lib.JsbBridge;
 
+import org.json.JSONException;
 import org.json.JSONObject;
 
 import java.lang.reflect.Method;
@@ -174,8 +175,15 @@ public final class CocosChatListener implements VoiceChatClient.Listener {
         sendToCocos("CHAT:MODE:SWITCHED", params);
     }
 
-    public void onSongStart(@NonNull String songName) {
-        sendToCocos("CHAT:SONG:STARTED", jPair("songName", songName));
+    public void onSongStart(int id, @NonNull String songName) {
+        JSONObject o = new JSONObject();
+        try {
+            o.put("songName", songName);
+            o.put("songId", id);
+        } catch (JSONException e) {
+            throw new RuntimeException(e);
+        }
+        sendToCocos("CHAT:SONG:STARTED", o);
     }
 
     @Override
@@ -188,8 +196,15 @@ public final class CocosChatListener implements VoiceChatClient.Listener {
     }
 
     @Override
-    public void onSongEnd(@NonNull String name) {
-        sendToCocos("CHAT:SONG:END", jPair("songName", name));
+    public void onSongEnd(int id, @NonNull String name) {
+        JSONObject o = new JSONObject();
+        try {
+            o.put("songName", name);
+            o.put("songId", id);
+        } catch (JSONException e) {
+            throw new RuntimeException(e);
+        }
+        sendToCocos("CHAT:SONG:END", o);
     }
 
     @Override
