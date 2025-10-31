@@ -613,6 +613,7 @@ public class VoiceChatClient {
         mode = Mode.SONG;
         log("播放歌曲: " + name + " id=" + currentSongId);
         Log.d("VoiceChatClient", "播放歌曲: " + name + " id=" + currentSongId);
+        this.ttsPlayer.resume();
 
         try { listener.onSongStart(name); } catch (Exception ignored) {}
     }
@@ -651,7 +652,8 @@ public class VoiceChatClient {
             log("切回聊天");
             Log.d("VoiceChatClient", "switchToChat called enableAsr: " + enableAsr + " isConnected: " + isConnected + " isReady: " + isReady);
             // 回到聊天后，根据 enableAsr 决定是否开始录音
-            if (enableAsr && isConnected && isReady) {
+            if (enableAsr) {
+                listener.onRecordingReady();
                 startRecording();
             }
         }
