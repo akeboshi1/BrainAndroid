@@ -17,4 +17,5 @@ public class Constant {
     // 二维码摄像头
     public static final int REQUEST_RECORD_CAMERA_PERMISSION = 1005;
 
+    public static final int REQUEST_CHAT_AUDIO_PERMISSION = 1101;
 }
