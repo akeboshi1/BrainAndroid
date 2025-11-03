@@ -1,0 +1,16 @@
+// Native build configuration for PaiPai-Android
+
+// 这个文件被主项目build.gradle引用
+// 在这里添加与原生代码(native)相关的构建配置
+
+task buildNative {
+    description 'Build native module'
+    group 'build'
+    
+    doLast {
+        println 'Building native module...'
+        // 在这里可以添加构建native代码的逻辑
+    }
+}
+
+// 其他与native相关的配置可以添加在这里 

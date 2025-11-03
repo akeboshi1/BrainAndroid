@@ -1,5 +1,7 @@
 // Top-level build file where you can add configuration options common to all sub-projects/modules.
 
+def NATIVE_DIR = 'native'
+
 buildscript {
 
     repositories {
@@ -15,4 +17,5 @@ buildscript {
     }
 }
 
-apply from: NATIVE_DIR +"/build.gradle"
+// 暂时注释掉native build.gradle的引用
+// apply from: NATIVE_DIR +"/build.gradle"
