@@ -34,6 +34,7 @@ public class VoiceChatClient {
 
     public interface Listener {
         void onReady();
+        void onLimitExceeded();
         void onLog(@NonNull String line);
         void onUserTranscript(@NonNull String text);
         void onAssistantFinal(@NonNull String text);
@@ -234,6 +235,11 @@ public class VoiceChatClient {
                 case "ready":
                     isReady = true; log("服务器 ready"); listener.onReady();
                     if (autoStartOnReady) startRecording();
+                    break;
+                case "limit_exceeded":
+                    Log.d("VoiceChatClient", "handleJsonMessage: limit_exceeded received");
+                    listener.onLimitExceeded();
+                    stopChat();
                     break;
                 case "transcript": {
                     String text = obj.optString("sanitized", obj.optString("text"));
