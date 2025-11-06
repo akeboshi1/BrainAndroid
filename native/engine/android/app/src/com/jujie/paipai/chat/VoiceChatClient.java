@@ -106,7 +106,7 @@ public class VoiceChatClient {
 
     // 添加缓冲区
     private final Map<String, ByteArrayOutputStream> songBuffers = new ConcurrentHashMap<>();
-    private static final int SONG_BUFFER_THRESHOLD = 2 * 1024 * 1024; // 32KB
+    private static final int SONG_BUFFER_THRESHOLD = 2 * 1024 * 1024; // 2MB
 
 
     @UnstableApi
@@ -673,24 +673,35 @@ public class VoiceChatClient {
             currentSongSeq = 0;
             songPaused = false;
         }
-        // 生成数据块的唯一标识（使用序列号和数据的简单哈希）
-//        String chunkKey = currentSongId + "#" + currentSongSeq + "-" + Arrays.hashCode(bytes);
-        String chunkKey = currentSongId + "-" + Arrays.hashCode(bytes);
 
-
-        // 检查是否已处理过这个数据块
-        if (!processedSongChunks.add(chunkKey)) {
-            Log.w("VoiceChatClient", "检测到重复的歌曲数据块，跳过: " + chunkKey);
+        // 歌曲流必须包含2字节songId头
+        if (bytes.length < 2) {
+            Log.w("VoiceChatClient", "收到无效歌曲二进制数据（长度不足2字节），丢弃");
             return;
         }
 
-//        Log.d("VoiceChatClient", "handleSongBinary: 收到歌曲二进制数据，长度=" + bytes.length +
-//                ", 当前序列号=" + currentSongSeq + ", 当前歌曲ID=" + currentSongId +
-//                ", 哈希=" + Arrays.hashCode(bytes));
-//
-//
-//        // 无论是否暂停，都将音频入队；暂停状态下播放器不会自动开始
-//        enqueueTts(currentSongId, currentSongSeq++, bytes, "", false);
+        // 解析前2字节的大端songId，并与当前歌曲ID比对（按UInt16范围）
+        int headerSongId = ((bytes[0] & 0xFF) << 8) | (bytes[1] & 0xFF);
+        int expectedSongId = currentSongUid & 0xFFFF;
+        if (headerSongId != expectedSongId) {
+            Log.w("VoiceChatClient", "丢弃非当前歌曲片段，headerSongId=" + headerSongId + ", expected=" + expectedSongId + ", currentSongUid=" + currentSongUid);
+            return;
+        }
+
+        // 去掉2字节头部，保留真实音频体
+        byte[] body = Arrays.copyOfRange(bytes, 2, bytes.length);
+        if (body.length == 0) {
+            Log.w("VoiceChatClient", "歌曲音频体为空，丢弃");
+            return;
+        }
+
+        // 基于真实音频体做去重
+        String chunkKey = currentSongId + "-" + Arrays.hashCode(body);
+        if (!processedSongChunks.add(chunkKey)) {
+            Log.w("VoiceChatClient", "检测到重复的歌曲数据块（已去除头部后），跳过: " + chunkKey);
+            return;
+        }
+
         // 获取或创建缓冲区
         ByteArrayOutputStream buffer = songBuffers.get(currentSongId);
         if (buffer == null) {
@@ -699,7 +710,7 @@ public class VoiceChatClient {
         }
 
         try {
-            buffer.write(bytes);
+            buffer.write(body);
 
             // 当缓冲区达到阈值时发送
             if (buffer.size() >= SONG_BUFFER_THRESHOLD) {
