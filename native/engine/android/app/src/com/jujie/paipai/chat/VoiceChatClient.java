@@ -683,6 +683,8 @@ public class VoiceChatClient {
         // 解析前2字节的大端songId，并与当前歌曲ID比对（按UInt16范围）
         int headerSongId = ((bytes[0] & 0xFF) << 8) | (bytes[1] & 0xFF);
         int expectedSongId = currentSongUid & 0xFFFF;
+        Log.d("VoiceChatClient", "handleSongBinary: headerSongId=" + headerSongId + ", expectedSongId=" + expectedSongId + ", currentSongUid=" + currentSongUid);
+
         if (headerSongId != expectedSongId) {
             Log.w("VoiceChatClient", "丢弃非当前歌曲片段，headerSongId=" + headerSongId + ", expected=" + expectedSongId + ", currentSongUid=" + currentSongUid);
             return;
