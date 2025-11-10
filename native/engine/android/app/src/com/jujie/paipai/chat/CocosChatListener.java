@@ -139,6 +139,11 @@ public final class CocosChatListener implements VoiceChatClient.Listener {
     }
 
     @Override
+    public void onLimitExceeded() {
+        sendToCocos("CHAT:USAGE:LIMIT_EXCEEDED", new JSONObject());
+    }
+
+    @Override
     public void onLog(@NonNull String line) {
         // sendToCocos("chat.log", jText(line));
     }

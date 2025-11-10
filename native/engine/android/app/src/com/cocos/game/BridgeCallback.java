@@ -81,11 +81,19 @@ public class BridgeCallback implements JsbBridge.ICallback {
                 JSONObject chatParams = new JSONObject(arg1);
                 String token = chatParams.optString("token");
                 String userNickName = chatParams.optString("userNickName");
+                boolean isProduction = chatParams.optBoolean("isProduction", false);
+
                 if(chatClient == null){
                     VoiceChatClient.Listener listener = new CocosChatListener();
                     chatClient = new VoiceChatClient(this.activity, listener);
                 }
-                String url = "wss://colapai.xinjiaxianglao.com/chat/voice-chat?token="+token+"&userNickName="+userNickName; // 默认测试环境
+//                String url = "wss://colapai.xinjiaxianglao.com/chat/voice-chat?token="+token+"&userNickName="+userNickName; // 默认测试环境
+                Log.d("BridgeCallback","CHAT:START : "+ arg1);
+                String url = "wss://test.paipai.xinjiaxianglao.com/chat/voice-chat?token="+token+"&userNickName="+userNickName; // 默认测试环境
+                if(isProduction){
+                    url = "wss://colapai.xinjiaxianglao.com/chat/voice-chat?token="+token+"&userNickName="+userNickName; // 默认测试环境
+                }
+
 //                String versionName = DeviceInfo.VERSION_NAME;
 //                if(!versionName.toLowerCase().endsWith("test")){
 //                    url = "wss://colapai.xinjiaxianglao.com/chat/voice-chat?token="+token; // 生产环境
