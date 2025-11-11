@@ -82,6 +82,7 @@ public class BridgeCallback implements JsbBridge.ICallback {
                 String token = chatParams.optString("token");
                 String userNickName = chatParams.optString("userNickName");
                 boolean isProduction = chatParams.optBoolean("isProduction", false);
+                int characterId = chatParams.optInt("characterId", 1);
 
                 if(chatClient == null){
                     VoiceChatClient.Listener listener = new CocosChatListener();
@@ -89,9 +90,10 @@ public class BridgeCallback implements JsbBridge.ICallback {
                 }
 //                String url = "wss://colapai.xinjiaxianglao.com/chat/voice-chat?token="+token+"&userNickName="+userNickName; // 默认测试环境
                 Log.d("BridgeCallback","CHAT:START : "+ arg1);
-                String url = "wss://test.paipai.xinjiaxianglao.com/chat/voice-chat?token="+token+"&userNickName="+userNickName; // 默认测试环境
+                String qs = "?token=" + token+"&userNickName="+userNickName + "&characterId=" + characterId;
+                String url = "wss://test.paipai.xinjiaxianglao.com/chat/voice-chat" + qs; // 默认测试环境
                 if(isProduction){
-                    url = "wss://colapai.xinjiaxianglao.com/chat/voice-chat?token="+token+"&userNickName="+userNickName; // 默认测试环境
+                    url = "wss://colapai.xinjiaxianglao.com/chat/voice-chat" + qs; // 默认测试环境
                 }
 
 //                String versionName = DeviceInfo.VERSION_NAME;
