@@ -70,6 +70,10 @@ public class ChatTransport {
                 .build();
     }
 
+    public boolean isConnected() {
+        return isConnected;
+    }
+
     public synchronized void connect(@NonNull String url) {
         manualClose = false;
         lastUrl = url;
