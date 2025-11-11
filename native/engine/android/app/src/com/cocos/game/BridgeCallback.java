@@ -142,12 +142,17 @@ public class BridgeCallback implements JsbBridge.ICallback {
                             && android.os.SystemClock.elapsedRealtime() - start < 5000) {
                         android.os.SystemClock.sleep(50);
                     }
+                    Log.d("BridgeCallback", "Transport connected: " + chatClient.isTransportConnected());
+
                     if (chatClient.isTransportConnected()) {
                         Log.e("BridgeCallback", "Transport close timeout");
                         chatClient.setSwitchingMode(false);
                         JsbBridge.sendToScript("CHAT:ERROR", "角色切换失败: 连接未释放");
                         return;
                     }
+
+                    Log.d("BridgeCallback", "Starting chat with new characterId: " + characterId);
+                    Log.d("BridgeCallback","Starting chat with URL: "+ url);
 
                     chatClient.startChat(url);
                 } else {
