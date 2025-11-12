@@ -110,6 +110,11 @@ public class VoiceChatClient {
     private final Map<String, ByteArrayOutputStream> songBuffers = new ConcurrentHashMap<>();
     private static final int SONG_BUFFER_THRESHOLD = 2 * 1024 * 1024; // 2MB
 
+    // 防抖/校验：仅当收到当前歌曲音频后，才接受 song_end；每首歌只入队一次结束标记
+    private volatile boolean currentSongAudioReceived = false;
+    private volatile boolean currentSongEndQueued = false;
+    private final Set<String> notifiedSongEnd = Collections.newSetFromMap(new ConcurrentHashMap<>());
+
 
     @UnstableApi
     public VoiceChatClient(@NonNull Context context, @NonNull Listener l) {
@@ -163,6 +168,11 @@ public class VoiceChatClient {
                         ", mode=" + mode);
 
                 if (mode == Mode.SONG && requestId.equals(currentSongId)) {
+                    // 去重：同一首歌只触发一次
+                    if (!notifiedSongEnd.add(requestId)) {
+                        Log.w("VoiceChatClient", "忽略重复歌曲结束标记: " + requestId);
+                        return;
+                    }
                     log("收到歌曲结束标记，触发歌曲结束事件: " + currentSongName);
                     Log.d("VoiceChatClient","----------------------------------------->"+currentSongName+", " + currentSongUid);
                     try {
@@ -363,11 +373,28 @@ public class VoiceChatClient {
                 }
                 case "song_end": {
                     if (mode == Mode.SONG && currentSongId != null) {
+                        // 如服务端带 songId，做严格校验；否则仅在已收到当前歌曲音频后才接受此结束
+                        int serverSongId = obj.has("songId") ? obj.optInt("songId", -1) : -1;
+                        int expected = currentSongUid & 0xFFFF;
+                        if (serverSongId != -1 && (serverSongId & 0xFFFF) != expected) {
+                            Log.w("VoiceChatClient", "忽略非当前歌曲的结束信号 serverSongId="+serverSongId+", expected="+expected);
+                            break;
+                        }
+                        if (!currentSongAudioReceived) {
+                            Log.w("VoiceChatClient", "忽略过期/抢先到达的歌曲结束信号（当前歌曲尚未收到音频）: " + currentSongName + "," + currentSongUid);
+                            break;
+                        }
+                        if (currentSongEndQueued) {
+                            Log.w("VoiceChatClient", "忽略重复歌曲结束信号: " + currentSongName + "," + currentSongUid);
+                            break;
+                        }
+
                         log("收到歌曲结束信号: " + currentSongName+","+currentSongUid);
-                        // 清空缓冲区
+                        // 清空缓冲区，发送剩余音频
                         flushSongBuffer(currentSongId);
                         // 在队列中添加结束标识
                         enqueueTts(currentSongId, currentSongSeq++, new byte[0], "", true);
+                        currentSongEndQueued = true;
                     }
                     break;
 
@@ -627,10 +654,15 @@ public class VoiceChatClient {
     private void switchToSong(@Nullable String responseId,int songId, @NonNull String songName) {
         Log.d("VoiceChatClient", "switchToSong: 开始设置歌曲状态, songName=" + songName);
 
+        // 切歌时彻底清理旧缓冲/状态
+        songBuffers.clear();
+        processedSongChunks.clear();
+        notifiedSongEnd.clear();
+        currentSongAudioReceived = false;
+        currentSongEndQueued = false;
+
         currentSongId = "song-" + SystemClock.elapsedRealtime();
         currentSongUid = songId;
-        // 在开始新歌曲时清空去重集合
-        processedSongChunks.clear();
 
         // 停止录音与清空所有音频（语音/歌曲）
         stopRecording();
@@ -730,6 +762,9 @@ public class VoiceChatClient {
             return;
         }
 
+        // 标记：当前歌曲已收到音频
+        currentSongAudioReceived = true;
+
         // 基于真实音频体做去重
         String chunkKey = currentSongId + "-" + Arrays.hashCode(body);
         if (!processedSongChunks.add(chunkKey)) {
@@ -770,6 +805,12 @@ public class VoiceChatClient {
     private void stopSongPlayback(boolean resetState) {
         try { ttsPlayer.cancelForResponse(currentSongId != null ? currentSongId : ""); } catch (Exception ignored) {}
         try { ttsPlayer.clear(); } catch (Exception ignored) {}
+        // 清理当前歌曲缓冲
+        if (currentSongId != null) {
+            songBuffers.remove(currentSongId);
+        }
+        currentSongAudioReceived = false;
+        currentSongEndQueued = false;
         if (resetState) {
             currentSongId = null;
             currentSongName = null;
@@ -777,6 +818,7 @@ public class VoiceChatClient {
             currentSongSeq = 0;
             songPaused = false;
             mode = Mode.CHAT;
+            notifiedSongEnd.clear();
         }
     }
 }
