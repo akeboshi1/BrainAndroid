@@ -260,7 +260,8 @@ public class VoiceChatClient {
                     }else{
                         listener.onReady();
                     }
-                    if (autoStartOnReady) startRecording();
+                    Log.d("VoiceChatClient", "handleJsonMessage: ready received, autoStartOnReady=" + autoStartOnReady);
+                    if (autoStartOnReady && enableAsr) startRecording();
                     break;
                 case "limit_exceeded":
                     Log.d("VoiceChatClient", "handleJsonMessage: limit_exceeded received");
