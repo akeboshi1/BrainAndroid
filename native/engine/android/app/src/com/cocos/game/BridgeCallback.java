@@ -82,6 +82,7 @@ public class BridgeCallback implements JsbBridge.ICallback {
                 String token = chatParams.optString("token");
                 String userNickName = chatParams.optString("userNickName");
                 boolean isProduction = chatParams.optBoolean("isProduction", false);
+                int characterId = chatParams.optInt("characterId", 1);
 
                 if(chatClient == null){
                     VoiceChatClient.Listener listener = new CocosChatListener();
@@ -89,9 +90,10 @@ public class BridgeCallback implements JsbBridge.ICallback {
                 }
 //                String url = "wss://colapai.xinjiaxianglao.com/chat/voice-chat?token="+token+"&userNickName="+userNickName; // 默认测试环境
                 Log.d("BridgeCallback","CHAT:START : "+ arg1);
-                String url = "wss://test.paipai.xinjiaxianglao.com/chat/voice-chat?token="+token+"&userNickName="+userNickName; // 默认测试环境
+                String qs = "?token=" + token+"&userNickName="+userNickName + "&characterId=" + characterId;
+                String url = "wss://test.paipai.xinjiaxianglao.com/chat/voice-chat" + qs; // 默认测试环境
                 if(isProduction){
-                    url = "wss://colapai.xinjiaxianglao.com/chat/voice-chat?token="+token+"&userNickName="+userNickName; // 默认测试环境
+                    url = "wss://colapai.xinjiaxianglao.com/chat/voice-chat" + qs; // 默认测试环境
                 }
 
 //                String versionName = DeviceInfo.VERSION_NAME;
@@ -101,6 +103,59 @@ public class BridgeCallback implements JsbBridge.ICallback {
                 chatClient.startChat(url);
             } catch (JSONException e) {
                 throw new RuntimeException(e);
+            }
+            return;
+        }
+
+        if (arg0.equals("CHAT:CHARACTER:SWITCH")) {
+            if(chatClient.isSwitchingMode()){
+                Log.e("BridgeCallback", "Character switch in progress, please wait.");
+                JsbBridge.sendToScript("CHAT:ERROR", "正切换角色中，请稍后再试");
+                return;
+            }
+            try {
+                JSONObject chatParams = new JSONObject(arg1);
+                String token = chatParams.optString("token");
+                String userNickName = chatParams.optString("userNickName");
+                boolean isProduction = chatParams.optBoolean("isProduction", false);
+                int characterId = chatParams.optInt("characterId", 1);
+
+                if (chatClient != null) {
+                    // 切换角色
+                    chatClient.stopChatSilently();
+                    chatClient.setSwitchingMode(true);
+
+                    Log.d("BridgeCallback","CHAT:CHARACTER:SWITCH : "+ arg1);
+                    String qs = "?token=" + token+"&userNickName="+userNickName + "&characterId=" + characterId;
+                    String url = "wss://test.paipai.xinjiaxianglao.com/chat/voice-chat" + qs; // 默认测试环境
+                    if(isProduction){
+                        url = "wss://colapai.xinjiaxianglao.com/chat/voice-chat" + qs; // 默认测试环境
+                    }
+
+//                String versionName = DeviceInfo.VERSION_NAME;
+//                if(!versionName.toLowerCase().endsWith("test")){
+//                    url = "wss://colapai.xinjiaxianglao.com/chat/voice-chat?token="+token; // 生产环境
+//                }
+                    // 最长等待 5 秒确认断开
+                    long start = android.os.SystemClock.elapsedRealtime();
+                    while (chatClient.isTransportConnected()
+                            && android.os.SystemClock.elapsedRealtime() - start < 5000) {
+                        android.os.SystemClock.sleep(50);
+                    }
+                    Log.d("BridgeCallback", "Transport connected: " + chatClient.isTransportConnected());
+                    Log.d("BridgeCallback", "Starting chat with new characterId: " + characterId);
+                    Log.d("BridgeCallback","Starting chat with URL: "+ url);
+
+                    chatClient.startChat(url);
+                } else {
+                    Log.e("BridgeCallback", "Chat client is not initialized");
+                    JsbBridge.sendToScript("CHAT:ERROR", "Chat client is not initialized");
+                }
+            }catch (JSONException e) {
+                Log.e("BridgeCallback", "JSON error", e);
+            }catch (Exception e){
+               chatClient.setSwitchingMode(false);
+               JsbBridge.sendToScript("CHAT:ERROR", "角色切换失败: " + e.getMessage());
             }
             return;
         }

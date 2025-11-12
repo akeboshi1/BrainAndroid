@@ -34,6 +34,7 @@ public class VoiceChatClient {
 
     public interface Listener {
         void onReady();
+        void onCharacterSwitched();
         void onLimitExceeded();
         void onLog(@NonNull String line);
         void onUserTranscript(@NonNull String text);
@@ -68,6 +69,7 @@ public class VoiceChatClient {
     private boolean isConnected = false;
     private boolean isReady = false;
     private boolean isMicReady = false;
+    private boolean isSwitchingMode = false;
 
     private final ChatTtsPlayer ttsPlayer;
     private @Nullable MicRecorder micRecorder;
@@ -224,6 +226,14 @@ public class VoiceChatClient {
         this.enableAsr = enable;
     }
 
+    public void setSwitchingMode(boolean switching){
+        this.isSwitchingMode = switching;
+    }
+
+    public boolean isSwitchingMode(){
+        return this.isSwitchingMode;
+    }
+
     private void handleJsonMessage(String raw){
         try {
             JSONObject obj = new JSONObject(raw);
@@ -233,7 +243,13 @@ public class VoiceChatClient {
             String responseId = !r1.isEmpty()? r1 : (!r2.isEmpty()? r2 : null);
             switch (type){
                 case "ready":
-                    isReady = true; log("服务器 ready"); listener.onReady();
+                    isReady = true; log("服务器 ready");
+                    if(isSwitchingMode){
+                        listener.onCharacterSwitched();
+                        isSwitchingMode = false;
+                    }else{
+                        listener.onReady();
+                    }
                     if (autoStartOnReady) startRecording();
                     break;
                 case "limit_exceeded":
@@ -562,6 +578,23 @@ public class VoiceChatClient {
     public void stopChat() {
         autoStartOnReady = false;
         disconnect();
+    }
+
+    public void stopChatSilently(){
+        Log.d("VoiceChatClient", "stopChatSilently called");
+        stopRecording();
+        clearTtsQueue();
+        resetConversation();
+        // 退出时重置歌曲状态
+        stopSongPlayback(true);
+        transport.close();
+        isConnected=false; isReady=false;
+        applyCommunicationAudioMode(false);
+    }
+
+    public boolean isTransportConnected(){
+         Log.d("VoiceChatClient", "isTransportConnected: " + isConnected);
+         return transport.isConnected();
     }
 
     private static <K, V> V getOrDefaultCompat(Map<K, V> map, K key, V def) {
