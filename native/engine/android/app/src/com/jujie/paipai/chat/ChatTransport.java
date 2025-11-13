@@ -122,6 +122,8 @@ public class ChatTransport {
     }
 
     private void openWebSocket(@NonNull String url) {
+        Log.d("ChatTransport", "openWebSocket. enableAsr: " + enableAsr);
+
         synchronized (this) {
             if (connecting) return; // 防止并发重复连接
             connecting = true;
@@ -153,13 +155,13 @@ public class ChatTransport {
                 isConnected = false;
                 synchronized (ChatTransport.this) { connecting = false; }
                 try { listener.onClosed(code, reason); } catch (Exception ignored) {}
-                //handleMaybeReconnect(code, reason, null);
+                handleMaybeReconnect(code, reason, null);
             }
             @Override public void onFailure(@NonNull WebSocket webSocket, @NonNull Throwable t, @Nullable Response response) {
                 isConnected = false;
                 synchronized (ChatTransport.this) { connecting = false; }
                 try { listener.onFailure(t, response); } catch (Exception ignored) {}
-                //handleMaybeReconnect(-1, String.valueOf(t.getMessage()), response);
+                handleMaybeReconnect(-1, String.valueOf(t.getMessage()), response);
             }
         });
     }
